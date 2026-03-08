@@ -1,0 +1,40 @@
+{
+  "name": "veridocs-sdk",
+  "version": "0.1.0",
+  "description": "VeriDocs SDK — Document lifecycle DID/VC sidecar for DMS integration",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node scripts/setup-org.js",
+    "did:create": "node create-did.js",
+    "did:check": "node check-dids.js",
+    "test": "node --test",
+    "postinstall": "patch-package"
+  },
+  "dependencies": {
+    "@veramo/core": "^6.0.0",
+    "@veramo/credential-ld": "^6.0.0",
+    "@veramo/credential-w3c": "^6.0.0",
+    "@veramo/data-store": "^6.0.0",
+    "@veramo/did-manager": "^6.0.0",
+    "@veramo/did-provider-key": "^6.0.0",
+    "@veramo/did-provider-web": "^6.0.0",
+    "@veramo/did-resolver": "^6.0.0",
+    "@veramo/key-manager": "^6.0.0",
+    "@veramo/kms-local": "^6.0.0",
+    "better-sqlite3": "^9.6.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "jose": "^5.2.3",
+    "jsonld": "^8.3.3",
+    "jsonld-signatures": "^11.5.0",
+    "reflect-metadata": "^0.2.2",
+    "sqlite3": "^5.1.7",
+    "typeorm": "^0.3.20",
+    "web-did-resolver": "^2.0.27"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.0"
+  }
+}

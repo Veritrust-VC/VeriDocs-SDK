@@ -1,0 +1,15 @@
+{
+  "@context": {
+    "schema": "https://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+
+    "OrganizationAccreditationCredential": "https://veritrust.vc/terms#OrganizationAccreditationCredential",
+    "accreditation": "https://veritrust.vc/terms#accreditation",
+    "accreditationLevel": "https://veritrust.vc/terms#accreditationLevel",
+    "policyUri": "https://veritrust.vc/terms#policyUri",
+    "compliance": {
+      "@id": "https://veritrust.vc/terms#compliance",
+      "@container": "@set"
+    }
+  }
+}

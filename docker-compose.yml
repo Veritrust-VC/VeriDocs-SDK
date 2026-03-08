@@ -1,0 +1,29 @@
+version: "3.9"
+
+# This docker-compose runs the SDK sidecar only.
+# It expects a VeriDocs Register to be running separately.
+# For a full stack (Register + SDK + DMS), see the OpenDMS repo.
+
+services:
+  sdk:
+    build: .
+    ports:
+      - "${SDK_PORT:-3100}:3100"
+    environment:
+      PORT: "3100"
+      SECRET_KEY: ${SECRET_KEY:-29739248cad1bd1a0fc4d9b75cd4d2990de535baf5caadfdf8d8f86664aa830c}
+      ORG_DID: ${ORG_DID:-}
+      REGISTRY_URL: ${REGISTRY_URL:-http://host.docker.internal:8001}
+      REGISTRY_API_KEY: ${REGISTRY_API_KEY:-}
+      REGISTRY_DOMAIN: ${REGISTRY_DOMAIN:-localhost%3A8001}
+      SIGNING_MODE: ${SIGNING_MODE:-local}
+      VERAMO_API_KEY: ${VERAMO_API_KEY:-}
+      VC_HOST_BASE: ${VC_HOST_BASE:-http://localhost:3100}
+      CONTEXT_ORIGIN: ${CONTEXT_ORIGIN:-http://localhost:3100}
+    volumes:
+      - sdk-data:/app/status-data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  sdk-data:

@@ -1,0 +1,20 @@
+{
+  "@context": {
+    "schema": "https://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+
+    "OrganizationContactCredential": "https://veritrust.vc/terms#OrganizationContactCredential",
+    "contactVerification": "https://veritrust.vc/terms#contactVerification",
+    "ContactVerification": "https://veritrust.vc/terms#ContactVerification",
+
+    "verifiedAttributes": {
+      "@id": "https://veritrust.vc/terms#verifiedAttributes",
+      "@container": "@set"
+    },
+    "verificationMethod": "https://veritrust.vc/terms#verificationMethod",
+    "verificationDate": {
+      "@id": "https://veritrust.vc/terms#verificationDate",
+      "@type": "xsd:date"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "@context": {
+    "@version": 1.1,
+    "@protected": true,
+    "veridocs": "https://veritrust.vc/ns/veridocs/v1#",
+    "schema": "https://schema.org/",
+    "DocumentCreatedCredential": "veridocs:DocumentCreatedCredential",
+    "DocumentSentCredential": "veridocs:DocumentSentCredential",
+    "DocumentReceivedCredential": "veridocs:DocumentReceivedCredential",
+    "DocumentAssignedCredential": "veridocs:DocumentAssignedCredential",
+    "DocumentDecidedCredential": "veridocs:DocumentDecidedCredential",
+    "DocumentArchivedCredential": "veridocs:DocumentArchivedCredential",
+    "DocumentLifecycleEvent": "veridocs:DocumentLifecycleEvent",
+    "eventType": "veridocs:eventType",
+    "documentTitle": "veridocs:documentTitle",
+    "classification": "veridocs:classification",
+    "localRegistrationNumber": "veridocs:localRegistrationNumber",
+    "issuerOrganization": {"@id": "veridocs:issuerOrganization", "@type": "@id"},
+    "recipientOrganization": {"@id": "veridocs:recipientOrganization", "@type": "@id"},
+    "senderOrganization": {"@id": "veridocs:senderOrganization", "@type": "@id"},
+    "deliveryMethod": "veridocs:deliveryMethod",
+    "assignee": "veridocs:assignee",
+    "department": "veridocs:department",
+    "decision": "veridocs:decision",
+    "resolution": "veridocs:resolution",
+    "archiveReference": "veridocs:archiveReference",
+    "timestamp": {"@id": "veridocs:timestamp", "@type": "http://www.w3.org/2001/XMLSchema#dateTime"},
+    "name": "schema:name",
+    "description": "schema:description"
+  }
+}

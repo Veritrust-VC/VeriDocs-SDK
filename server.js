@@ -251,6 +251,56 @@ app.get('/api/documents/:did/track', async (req, res) => {
 });
 
 // ═══════════════════════════════════════════
+// AI Intelligence Layer
+// ═══════════════════════════════════════════
+
+const { recommendRouting } = require('./src/ai/routing');
+const { harmonizeStatuses, mapStatus } = require('./src/ai/harmonization');
+const { isConfigured: aiConfigured, getConfig: aiConfig } = require('./src/ai/llm-client');
+
+app.get('/api/ai/health', (req, res) => {
+  res.json({
+    ai_available: aiConfigured(),
+    provider: aiConfig().provider,
+    model: aiConfig().model,
+    capabilities: ['intelligent_routing', 'status_harmonization'],
+  });
+});
+
+app.post('/api/ai/routing', requireApiKey, async (req, res) => {
+  const { document, sender, lifecycleEvents, orgStructure } = req.body || {};
+  if (!document) return res.status(400).json({ error: 'Required: document' });
+  try {
+    const result = await recommendRouting(document, sender || {}, lifecycleEvents || [], orgStructure || []);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Routing failed', detail: err.message });
+  }
+});
+
+app.post('/api/ai/harmonize', requireApiKey, async (req, res) => {
+  const { statuses, context } = req.body || {};
+  if (!statuses || !Array.isArray(statuses)) return res.status(400).json({ error: 'Required: statuses (array)' });
+  try {
+    const result = await harmonizeStatuses(statuses, context);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Harmonization failed', detail: err.message });
+  }
+});
+
+app.post('/api/ai/map-status', requireApiKey, async (req, res) => {
+  const { status, context } = req.body || {};
+  if (!status) return res.status(400).json({ error: 'Required: status' });
+  try {
+    const result = await mapStatus(status, context);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Mapping failed', detail: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════
 // DID/VC utilities
 // ═══════════════════════════════════════════
 

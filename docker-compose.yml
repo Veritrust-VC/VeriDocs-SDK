@@ -22,6 +22,7 @@ services:
       CONTEXT_ORIGIN: ${CONTEXT_ORIGIN:-http://localhost:3100}
     volumes:
       - sdk-data:/app/status-data
+      - ./data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

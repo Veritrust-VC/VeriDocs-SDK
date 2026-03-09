@@ -20,6 +20,15 @@ async function getAgent() {
 
 const REGISTRY_DOMAIN = (process.env.REGISTRY_DOMAIN || 'localhost%3A8001');
 
+function normalizeOrgCode(code) {
+  return String(code || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 /**
  * Create an organization DID and register it with the Veramo agent.
  * @param {string} orgCode - Organization code (e.g., 'ACME-001')
@@ -28,7 +37,9 @@ const REGISTRY_DOMAIN = (process.env.REGISTRY_DOMAIN || 'localhost%3A8001');
  */
 async function createOrganizationDID(orgCode, alias) {
   const agent = await getAgent();
-  const did = `did:web:${REGISTRY_DOMAIN}:org:${orgCode}`;
+  const normalizedOrgCode = normalizeOrgCode(orgCode);
+  if (!normalizedOrgCode) throw new Error('Invalid orgCode. Provide a non-empty slug-safe organization code.');
+  const did = `did:web:${REGISTRY_DOMAIN}:org:${normalizedOrgCode}`;
 
   // Check if already exists
   try {
@@ -46,7 +57,7 @@ async function createOrganizationDID(orgCode, alias) {
 
   const identifier = await agent.didManagerCreate({
     provider: 'did:web',
-    alias: alias || orgCode,
+    alias: normalizedOrgCode,
     kms: 'local',
     options: {
       keyType: 'Secp256k1',
@@ -126,6 +137,7 @@ async function getPublicKeyHex(did) {
 }
 
 module.exports = {
+  normalizeOrgCode,
   createOrganizationDID,
   createDocumentDID,
   getIdentifier,

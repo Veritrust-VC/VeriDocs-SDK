@@ -53,12 +53,14 @@ curl -X POST http://localhost:3100/api/setup/org \
   -d '{"orgCode": "MYORG-001", "orgName": "My Organization"}'
 ```
 
-Copy the returned DID into your `.env`:
-```
-ORG_DID=did:web:localhost%3A8001:org:MYORG-001
-```
+The SDK automatically persists this DID as the active organization DID for lifecycle hooks.
 
-Restart: `docker compose restart sdk`
+Check readiness:
+
+```bash
+curl http://localhost:3100/api/setup/status
+curl http://localhost:3100/api/setup/verify
+```
 
 ### 3. Use from your DMS
 
@@ -84,7 +86,8 @@ curl http://localhost:3100/api/documents/{docDid}/track
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/setup/org` | Create organization DID and register with Registry |
-| `GET` | `/api/setup/status` | Check setup status, Registry connection, signing mode |
+| `GET` | `/api/setup/status` | Current SDK state, active org DID, connectivity, and last setup metadata |
+| `GET` | `/api/setup/verify` | Readiness check for lifecycle usage (org DID + registry + managed identifier) |
 
 ### Document Lifecycle
 
@@ -137,7 +140,7 @@ DELEGATE_API_KEY=your-registry-api-key
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SECRET_KEY` | (required) | 32-byte hex for encrypted key storage |
-| `ORG_DID` | | Organization DID (set after setup) |
+| `ORG_DID` | | Optional fallback/legacy bootstrap DID. Preferred mode is SDK-managed persisted active org DID. |
 | `REGISTRY_URL` | `http://localhost:8001` | VeriDocs Register API URL |
 | `REGISTRY_API_KEY` | | API key for Registry |
 | `REGISTRY_DOMAIN` | `localhost%3A8001` | Domain used in `did:web` identifiers |
@@ -210,6 +213,7 @@ services:
     image: ghcr.io/veritrust-vc/veridocs-sdk:latest
     environment:
       SECRET_KEY: ${SECRET_KEY}
+      # ORG_DID optional fallback; SDK persists active DID after /api/setup/org
       ORG_DID: ${ORG_DID}
       REGISTRY_URL: https://registry.example.com
 ```
@@ -224,3 +228,16 @@ services:
 ## License
 
 MIT
+
+## Persistence
+
+The SDK persists the active organization DID and last setup metadata in a local state file (`data/sdk-state.json` by default, configurable via `SDK_STATE_FILE`). In Docker deployments, mount a persistent volume for `/app/data` to avoid losing active configuration when containers are recreated.
+
+## Lifecycle Readiness
+
+A DID returned by setup does not always mean lifecycle submission is ready. Full lifecycle readiness requires:
+- active organization DID configured in SDK state (or fallback env),
+- Registry reachable,
+- managed identifier present in the SDK agent.
+
+Use `GET /api/setup/verify` for machine-usable readiness flags.

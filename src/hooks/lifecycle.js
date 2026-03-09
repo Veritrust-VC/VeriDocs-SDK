@@ -17,10 +17,10 @@
 const { createLifecycleVC } = require('../vc-builder');
 const { createDocumentDID } = require('../did-manager');
 const { RegistryClient } = require('../registry-client');
+const { getActiveOrgDid } = require('../state-store');
 
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:8001';
 const REGISTRY_API_KEY = process.env.REGISTRY_API_KEY || '';
-const ORG_DID = process.env.ORG_DID || '';
 
 let _client;
 function getRegistryClient() {
@@ -28,9 +28,14 @@ function getRegistryClient() {
   return _client;
 }
 
+function getConfiguredOrgDid() {
+  return getActiveOrgDid() || process.env.ORG_DID || '';
+}
+
 function requireOrgDid() {
-  if (!ORG_DID) throw new Error('ORG_DID environment variable not set. Run the setup first.');
-  return ORG_DID;
+  const did = getConfiguredOrgDid();
+  if (!did) throw new Error('Organization DID not configured. Run POST /api/setup/org first.');
+  return did;
 }
 
 /**

@@ -41,6 +41,12 @@ const { createOrganizationDID, createDocumentDID, listIdentifiers, getPublicKeyH
 const { createLifecycleVC, verifyVC } = require('./src/vc-builder');
 const hooks = require('./src/hooks/lifecycle');
 const { RegistryClient } = require('./src/registry-client');
+const {
+  setActiveOrgDid,
+  getActiveOrgDid,
+  setLastSetup,
+  getLastSetup,
+} = require('./src/state-store');
 
 const PORT = parseInt(process.env.PORT || process.env.SDK_PORT || '3100', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -112,17 +118,50 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
       };
     }
 
+    // Persist active organization DID for lifecycle hooks
+    setActiveOrgDid(orgResult.did);
+
     // 4. Register with central Registry
-    let registryResult;
-    try {
-      const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
-      registryResult = await client.registerOrganization(
-        didDocument, publicKeyHex || '', orgName, orgDescription,
-      );
-    } catch (regErr) {
-      console.warn('[SDK] Registry registration failed (may already exist):', regErr.message);
-      registryResult = { status: 'skipped', detail: regErr.message };
+    let registryResult = {
+      attempted: false,
+      connected: false,
+      registered: false,
+    };
+    if (REGISTRY_URL) {
+      try {
+        const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+        const rawRegistryResult = await client.registerOrganization(
+          didDocument, publicKeyHex || '', orgName, orgDescription,
+        );
+        registryResult = {
+          attempted: true,
+          connected: true,
+          registered: true,
+          result: rawRegistryResult,
+        };
+      } catch (regErr) {
+        console.warn('[SDK] Registry registration failed (may already exist):', regErr.message);
+        registryResult = {
+          attempted: true,
+          connected: false,
+          registered: false,
+          error: regErr.message,
+        };
+      }
     }
+
+    const lastSetup = {
+      orgCode,
+      orgName,
+      orgDescription: orgDescription || '',
+      did: orgResult.did,
+      alreadyExisted: !!orgResult.alreadyExisted,
+      registry: registryResult,
+      timestamp: new Date().toISOString(),
+    };
+    setLastSetup(lastSetup);
+
+    const lifecycleReady = !!orgResult.did && registryResult.connected;
 
     res.status(201).json({
       status: 'ok',
@@ -130,10 +169,9 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
       alreadyExisted: orgResult.alreadyExisted,
       keys: orgResult.keys,
       registry: registryResult,
-      next_steps: [
-        `Set ORG_DID=${orgResult.did} in your environment`,
-        'Restart the SDK to activate lifecycle hooks',
-      ],
+      active_org_did_persisted: true,
+      lifecycle_ready: lifecycleReady,
+      message: 'Organization DID is now active in SDK and will be used for lifecycle hooks.',
     });
   } catch (err) {
     console.error('[SDK] Org setup failed:', err);
@@ -142,7 +180,8 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
 });
 
 app.get('/api/setup/status', async (req, res) => {
-  const orgDid = process.env.ORG_DID || '';
+  const orgDid = getActiveOrgDid() || process.env.ORG_DID || '';
+  const lastSetup = getLastSetup();
   let registryOk = false;
   try {
     const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
@@ -163,6 +202,35 @@ app.get('/api/setup/status', async (req, res) => {
     registry_url: REGISTRY_URL,
     registry_connected: registryOk,
     managed_dids: managedDids,
+    last_setup: lastSetup,
+  });
+});
+
+app.get('/api/setup/verify', async (req, res) => {
+  const orgDid = getActiveOrgDid() || process.env.ORG_DID || '';
+  let registryConnected = false;
+  let managedIdentifierExists = false;
+
+  try {
+    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+    const h = await client.health();
+    registryConnected = h.status === 'ok';
+  } catch (e) { /* */ }
+
+  try {
+    const ids = await listIdentifiers();
+    managedIdentifierExists = !!orgDid && ids.some(i => i.did === orgDid);
+  } catch (e) { /* */ }
+
+  const orgDidConfigured = !!orgDid;
+  const readyForLifecycle = orgDidConfigured && registryConnected && managedIdentifierExists;
+
+  res.json({
+    org_did: orgDid || null,
+    org_did_configured: orgDidConfigured,
+    registry_connected: registryConnected,
+    managed_identifier_exists: managedIdentifierExists,
+    ready_for_lifecycle: readyForLifecycle,
   });
 });
 
@@ -341,7 +409,10 @@ app.get('/api/identifiers', requireApiKey, async (req, res) => {
 // ═══════════════════════════════════════════
 
 app.get('/api/health', async (req, res) => {
-  const orgDid = process.env.ORG_DID || '';
+  const stateOrgDid = getActiveOrgDid();
+  const envOrgDid = process.env.ORG_DID || '';
+  const orgDid = stateOrgDid || envOrgDid || '';
+  const orgDidSource = stateOrgDid ? 'state' : (envOrgDid ? 'env' : 'none');
   let agentOk = false, managedDids = 0;
   try {
     const ids = await listIdentifiers();
@@ -360,6 +431,7 @@ app.get('/api/health', async (req, res) => {
     status: agentOk ? 'ok' : 'degraded',
     service: 'veridocs-sdk',
     org_did: orgDid || null,
+    org_did_source: orgDidSource,
     signing_mode: process.env.SIGNING_MODE || 'local',
     managed_dids: managedDids,
     registry_url: REGISTRY_URL,
@@ -375,10 +447,16 @@ app.get('/api/health', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
+  const stateOrgDid = getActiveOrgDid();
+  const envOrgDid = process.env.ORG_DID || '';
+  const orgDid = stateOrgDid || envOrgDid || '';
+  const orgDidSource = stateOrgDid ? 'state' : (envOrgDid ? 'env' : 'none');
+
   res.json({
     name: 'VeriDocs SDK',
     description: 'Document lifecycle DID/VC sidecar for DMS integration',
-    org_did: process.env.ORG_DID || '(not configured)',
+    org_did: orgDid || '(not configured)',
+    org_did_source: orgDidSource,
     registry: REGISTRY_URL,
     signing_mode: process.env.SIGNING_MODE || 'local',
   });
@@ -393,7 +471,9 @@ app.listen(PORT, HOST, async () => {
   console.log(`VeriDocs SDK sidecar: http://${HOST}:${PORT}`);
   console.log(`Registry: ${REGISTRY_URL}`);
   console.log(`Signing mode: ${process.env.SIGNING_MODE || 'local'}`);
-  console.log(`Org DID: ${process.env.ORG_DID || '(not set — POST /api/setup/org)'}`);
+  const stateOrgDid = getActiveOrgDid();
+  const envOrgDid = process.env.ORG_DID || '';
+  console.log(`Org DID: ${stateOrgDid || envOrgDid || '(not set — POST /api/setup/org)'}`);
   try {
     const ids = await listIdentifiers();
     console.log(`Managed DIDs: ${ids.length}`);

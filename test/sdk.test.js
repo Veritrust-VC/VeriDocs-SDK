@@ -23,6 +23,7 @@ describe('SDK Health', () => {
     assert.equal(status, 200);
     assert.equal(body.status, 'ok');
     assert.equal(body.service, 'veridocs-sdk');
+    assert.ok('org_did_source' in body);
     assert.ok(body.capabilities.includes('lifecycle-hooks'));
   });
 });
@@ -34,6 +35,17 @@ describe('SDK Setup', () => {
     assert.ok('org_did' in body);
     assert.ok('registry_connected' in body);
     assert.ok('signing_mode' in body);
+    assert.ok('last_setup' in body);
+  });
+
+
+  it('should expose setup verification endpoint', async () => {
+    const { status, body } = await api('/api/setup/verify');
+    assert.equal(status, 200);
+    assert.ok('org_did_configured' in body);
+    assert.ok('registry_connected' in body);
+    assert.ok('managed_identifier_exists' in body);
+    assert.ok('ready_for_lifecycle' in body);
   });
 
   it('should create organization DID', async () => {

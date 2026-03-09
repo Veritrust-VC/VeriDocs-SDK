@@ -30,7 +30,7 @@ Your DMS
 └─────────────────────────┘         └─────────────────────────┘
 ```
 
-Your DMS calls the SDK via simple HTTP. The SDK handles all DID/VC complexity — key management, credential signing, Registry communication. The DMS never touches cryptography directly.
+Your DMS calls the SDK via simple HTTP. The SDK handles all DID/VC complexity — key management, credential signing, Registry communication, and Register authentication. Register endpoints are protected, so the SDK authenticates with service credentials before protected calls. OpenDMS (or any DMS) never talks directly to Register.
 
 ## Quick Start
 
@@ -45,7 +45,7 @@ docker compose up --build
 
 SDK starts at **http://localhost:3100**.
 
-### 2. Create your organization DID
+### 2. Configure Register access and create your organization DID
 
 ```bash
 curl -X POST http://localhost:3100/api/setup/org \
@@ -53,7 +53,7 @@ curl -X POST http://localhost:3100/api/setup/org \
   -d '{"orgCode": "MYORG-001", "orgName": "My Organization"}'
 ```
 
-The SDK automatically persists this DID as the active organization DID for lifecycle hooks.
+The SDK automatically persists this DID as the active organization DID for lifecycle hooks, authenticates to Register using `REGISTRY_EMAIL` and `REGISTRY_PASSWORD`, and registers the organization centrally.
 
 Check readiness:
 
@@ -86,7 +86,7 @@ curl http://localhost:3100/api/documents/{docDid}/track
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/setup/org` | Create organization DID and register with Registry |
-| `GET` | `/api/setup/status` | Current SDK state, active org DID, connectivity, and last setup metadata |
+| `GET` | `/api/setup/status` | Current SDK state, active org DID, registry connectivity/authentication, readiness, and last setup metadata |
 | `GET` | `/api/setup/verify` | Readiness check for lifecycle usage (org DID + registry + managed identifier) |
 
 ### Document Lifecycle
@@ -113,7 +113,7 @@ curl http://localhost:3100/api/documents/{docDid}/track
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health check |
+| `GET` | `/api/health` | Health check including registry connectivity/authentication summary |
 | `GET` | `/.well-known/did.json` | This agent's DID Document |
 | `GET` | `/contexts/*.jsonld` | JSON-LD context files |
 
@@ -142,7 +142,9 @@ DELEGATE_API_KEY=your-registry-api-key
 | `SECRET_KEY` | (required) | 32-byte hex for encrypted key storage |
 | `ORG_DID` | | Optional fallback/legacy bootstrap DID. Preferred mode is SDK-managed persisted active org DID. |
 | `REGISTRY_URL` | `http://localhost:8001` | VeriDocs Register API URL |
-| `REGISTRY_API_KEY` | | API key for Registry |
+| `REGISTRY_EMAIL` | | Register service account email (required for protected registry operations) |
+| `REGISTRY_PASSWORD` | | Register service account password (required for protected registry operations) |
+| `REGISTRY_API_KEY` | | Optional API key header for Registry if deployment uses it |
 | `REGISTRY_DOMAIN` | `localhost%3A8001` | Domain used in `did:web` identifiers |
 | `SIGNING_MODE` | `local` | `local` or `delegate` |
 | `DELEGATE_URL` | | Registry Veramo URL (for delegate mode) |
@@ -216,6 +218,8 @@ services:
       # ORG_DID optional fallback; SDK persists active DID after /api/setup/org
       ORG_DID: ${ORG_DID}
       REGISTRY_URL: https://registry.example.com
+      REGISTRY_EMAIL: sdk-service@example.com
+      REGISTRY_PASSWORD: change-me
 ```
 
 ## Related Repositories
@@ -241,3 +245,24 @@ A DID returned by setup does not always mean lifecycle submission is ready. Full
 - managed identifier present in the SDK agent.
 
 Use `GET /api/setup/verify` for machine-usable readiness flags.
+
+## Register Authentication and Health Semantics
+
+Protected Register routes such as `POST /api/v1/orgs`, `POST /api/v1/docs`, and `POST /api/v1/events` require bearer authentication. The SDK first calls `POST /api/v1/auth/login`, caches the access token in memory, and sends `Authorization: Bearer <token>` on protected requests.
+
+The Register health endpoint used by SDK is the public `GET /api/v1/health` route (not `/health`).
+
+Setup flow for central registration:
+1. Configure `REGISTRY_URL`, `REGISTRY_EMAIL`, and `REGISTRY_PASSWORD`.
+2. Call `POST /api/setup/org`.
+3. SDK creates and persists the active organization DID.
+4. SDK authenticates to Register and registers organization metadata centrally.
+5. Verify state via `GET /api/setup/status`.
+
+`/api/health` and `/api/setup/status` include:
+- `registry_connected`
+- `registry_auth_configured`
+- `registry_authenticated`
+- `registry_auth_error`
+
+Readiness (`lifecycle_ready`/`ready_for_lifecycle`) requires an org DID plus registry connectivity and successful auth.

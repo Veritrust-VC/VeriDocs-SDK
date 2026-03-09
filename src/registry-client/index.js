@@ -45,31 +45,44 @@ class RegistryClient {
       throw new Error(`Registry login failed: invalid JSON response (${err.message})`);
     }
 
-    if (!payload.access_token) {
-      throw new Error('Registry login failed: access_token missing in response');
+    const token = payload.access_token || payload.token || null;
+    const tokenType = payload.token_type || 'bearer';
+
+    if (!token) {
+      throw new Error(
+        `Registry login failed: token missing in response: ${JSON.stringify(payload)}`,
+      );
     }
 
-    registryToken = payload.access_token;
+    registryToken = token;
     registryTokenObtainedAt = new Date().toISOString();
 
-    return registryToken;
+    return {
+      token,
+      tokenType,
+      user: payload.user || null,
+    };
   }
 
   async getRegistryToken(forceRefresh = false) {
     if (!forceRefresh && registryToken) {
-      return registryToken;
+      return {
+        token: registryToken,
+        tokenType: 'bearer',
+        user: null,
+      };
     }
 
     return this.loginToRegistry();
   }
 
   async registryFetch(path, options = {}, retry = true) {
-    const token = await this.getRegistryToken();
+    const auth = await this.getRegistryToken();
     const url = `${this.baseUrl}${path}`;
 
     const headers = {
       ...(options.headers || {}),
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${auth.token || auth}`,
     };
 
     if (this.apiKey) {
@@ -87,8 +100,8 @@ class RegistryClient {
     });
 
     if (response.status === 401 && retry) {
-      const freshToken = await this.getRegistryToken(true);
-      headers.Authorization = `Bearer ${freshToken}`;
+      const freshAuth = await this.getRegistryToken(true);
+      headers.Authorization = `Bearer ${freshAuth.token || freshAuth}`;
       return fetch(url, {
         ...options,
         headers,

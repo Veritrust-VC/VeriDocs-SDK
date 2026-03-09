@@ -11,7 +11,7 @@ Run it alongside your DMS. Every document lifecycle action — created, sent, re
 ## How It Works
 
 ```
-Your DMS (Namejs, DocLogix, etc.)
+Your DMS 
     │
     │  POST /api/documents/create
     │  POST /api/documents/{did}/send

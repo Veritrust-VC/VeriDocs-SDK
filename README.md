@@ -2,7 +2,7 @@
 
 Docker sidecar for integrating document lifecycle DID/VC capabilities into any Document Management System.
 
-Run it alongside your DMS (Namejs, Lietvaris, DocLogix, or any DMS). Every document lifecycle action — created, sent, received, assigned, decided, archived — is signed as a W3C Verifiable Credential and submitted to the central [VeriDocs Register](https://github.com/Veritrust-VC/VeriDocs-Register).
+Run it alongside your DMS. Every document lifecycle action — created, sent, received, assigned, decided, archived — is signed as a W3C Verifiable Credential and submitted to the central [VeriDocs Register](https://github.com/Veritrust-VC/VeriDocs-Register).
 
 **Forked from [VeriTrust](https://veritrust.vc) production codebase.** Uses the same Veramo 6.x agent, JsonWebSignature2020 proof type, ES256K signatures, and StatusList2021 revocation. Credentials issued by VeriDocs SDK are interoperable with VeriTrust production.
 

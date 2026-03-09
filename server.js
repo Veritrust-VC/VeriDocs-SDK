@@ -37,8 +37,8 @@ const fs = require('fs');
 const path = require('path');
 const { createAgentInstance } = require('./agent-setup');
 const { requireApiKey } = require('./auth');
-const { createOrganizationDID, createDocumentDID, listIdentifiers, getPublicKeyHex } = require('./src/did-manager');
-const { createLifecycleVC, verifyVC } = require('./src/vc-builder');
+const { createOrganizationDID, listIdentifiers } = require('./src/did-manager');
+const { verifyVC } = require('./src/vc-builder');
 const hooks = require('./src/hooks/lifecycle');
 const { RegistryClient } = require('./src/registry-client');
 const {
@@ -52,6 +52,29 @@ const PORT = parseInt(process.env.PORT || process.env.SDK_PORT || '3100', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:8001';
 const REGISTRY_API_KEY = process.env.REGISTRY_API_KEY || '';
+
+function isRegistryAuthConfigured() {
+  return !!(process.env.REGISTRY_EMAIL && process.env.REGISTRY_PASSWORD);
+}
+
+async function getRegistryStatus(client) {
+  let registryConnected = false;
+  try {
+    const health = await client.health();
+    registryConnected = health && health.status === 'ok';
+  } catch (error) {
+    registryConnected = false;
+  }
+
+  const authResult = await client.testAuth();
+
+  return {
+    registry_connected: registryConnected,
+    registry_auth_configured: authResult.auth_configured,
+    registry_authenticated: authResult.authenticated,
+    registry_auth_error: authResult.error,
+  };
+}
 
 // Pre-initialize agent
 const agentReady = createAgentInstance().catch(err => {
@@ -89,21 +112,17 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
   if (!orgCode) return res.status(400).json({ error: 'Required: orgCode' });
 
   try {
-    // 1. Create organization DID in local Veramo
     const orgResult = await createOrganizationDID(orgCode, orgName);
     console.log(`[SDK] Organization DID: ${orgResult.did} (existed: ${orgResult.alreadyExisted})`);
 
-    // 2. Get public key for Registry registration
     const publicKeyHex = orgResult.keys && orgResult.keys[0] && orgResult.keys[0].publicKeyHex;
 
-    // 3. Build DID Document for Registry
     const agent = await agentReady;
     let didDocument;
     try {
       const resolution = await agent.resolveDid({ didUrl: orgResult.did });
       didDocument = resolution.didDocument;
     } catch (e) {
-      // Build minimal DID doc
       didDocument = {
         '@context': ['https://www.w3.org/ns/did/v1'],
         id: orgResult.did,
@@ -118,37 +137,53 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
       };
     }
 
-    // Persist active organization DID for lifecycle hooks
     setActiveOrgDid(orgResult.did);
 
-    // 4. Register with central Registry
+    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+    const registryStatus = await getRegistryStatus(client);
+
     let registryResult = {
-      attempted: false,
-      connected: false,
+      attempted: true,
+      connected: registryStatus.registry_connected,
+      auth_configured: registryStatus.registry_auth_configured,
+      authenticated: registryStatus.registry_authenticated,
       registered: false,
+      error: null,
     };
-    if (REGISTRY_URL) {
+
+    if (!REGISTRY_URL) {
+      registryResult = {
+        ...registryResult,
+        connected: false,
+        attempted: false,
+        error: 'Registry URL is not configured',
+      };
+    } else if (!isRegistryAuthConfigured()) {
+      registryResult.error = 'Registry credentials are not configured';
+    } else if (!registryStatus.registry_connected) {
+      registryResult.error = 'Registry health check failed';
+    } else if (!registryStatus.registry_authenticated) {
+      registryResult.error = registryStatus.registry_auth_error;
+    } else {
       try {
-        const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
         const rawRegistryResult = await client.registerOrganization(
-          didDocument, publicKeyHex || '', orgName, orgDescription,
+          didDocument,
+          publicKeyHex || '',
+          orgName,
+          orgDescription,
         );
-        registryResult = {
-          attempted: true,
-          connected: true,
-          registered: true,
-          result: rawRegistryResult,
-        };
+        registryResult.registered = true;
+        registryResult.result = rawRegistryResult;
       } catch (regErr) {
-        console.warn('[SDK] Registry registration failed (may already exist):', regErr.message);
-        registryResult = {
-          attempted: true,
-          connected: false,
-          registered: false,
-          error: regErr.message,
-        };
+        registryResult.error = regErr.message;
       }
     }
+
+    const lifecycleReady = !!orgResult.did
+      && registryResult.connected
+      && registryResult.auth_configured
+      && registryResult.authenticated
+      && registryResult.registered;
 
     const lastSetup = {
       orgCode,
@@ -157,21 +192,23 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
       did: orgResult.did,
       alreadyExisted: !!orgResult.alreadyExisted,
       registry: registryResult,
+      lifecycle_ready: lifecycleReady,
       timestamp: new Date().toISOString(),
     };
     setLastSetup(lastSetup);
 
-    const lifecycleReady = !!orgResult.did && registryResult.connected;
+    const message = lifecycleReady
+      ? 'Organization DID created and registered in central registry.'
+      : `Organization DID created locally, but central registry registration is unavailable: ${registryResult.error || 'unknown error'}.`;
 
     res.status(201).json({
-      status: 'ok',
       did: orgResult.did,
       alreadyExisted: orgResult.alreadyExisted,
       keys: orgResult.keys,
-      registry: registryResult,
       active_org_did_persisted: true,
+      registry: registryResult,
       lifecycle_ready: lifecycleReady,
-      message: 'Organization DID is now active in SDK and will be used for lifecycle hooks.',
+      message,
     });
   } catch (err) {
     console.error('[SDK] Org setup failed:', err);
@@ -182,12 +219,8 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
 app.get('/api/setup/status', async (req, res) => {
   const orgDid = getActiveOrgDid() || process.env.ORG_DID || '';
   const lastSetup = getLastSetup();
-  let registryOk = false;
-  try {
-    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
-    const h = await client.health();
-    registryOk = h.status === 'ok';
-  } catch (e) { /* */ }
+  const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+  const registryStatus = await getRegistryStatus(client);
 
   let managedDids = [];
   try {
@@ -195,12 +228,21 @@ app.get('/api/setup/status', async (req, res) => {
     managedDids = ids.map(i => ({ did: i.did, alias: i.alias }));
   } catch (e) { /* */ }
 
+  const lifecycleReady = !!orgDid
+    && registryStatus.registry_connected
+    && registryStatus.registry_auth_configured
+    && registryStatus.registry_authenticated;
+
   res.json({
     org_did: orgDid || null,
     org_did_configured: !!orgDid,
     signing_mode: process.env.SIGNING_MODE || 'local',
     registry_url: REGISTRY_URL,
-    registry_connected: registryOk,
+    registry_connected: registryStatus.registry_connected,
+    registry_auth_configured: registryStatus.registry_auth_configured,
+    registry_authenticated: registryStatus.registry_authenticated,
+    registry_auth_error: registryStatus.registry_auth_error,
+    lifecycle_ready: lifecycleReady,
     managed_dids: managedDids,
     last_setup: lastSetup,
   });
@@ -208,14 +250,10 @@ app.get('/api/setup/status', async (req, res) => {
 
 app.get('/api/setup/verify', async (req, res) => {
   const orgDid = getActiveOrgDid() || process.env.ORG_DID || '';
-  let registryConnected = false;
   let managedIdentifierExists = false;
 
-  try {
-    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
-    const h = await client.health();
-    registryConnected = h.status === 'ok';
-  } catch (e) { /* */ }
+  const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+  const registryStatus = await getRegistryStatus(client);
 
   try {
     const ids = await listIdentifiers();
@@ -223,12 +261,19 @@ app.get('/api/setup/verify', async (req, res) => {
   } catch (e) { /* */ }
 
   const orgDidConfigured = !!orgDid;
-  const readyForLifecycle = orgDidConfigured && registryConnected && managedIdentifierExists;
+  const readyForLifecycle = orgDidConfigured
+    && registryStatus.registry_connected
+    && registryStatus.registry_auth_configured
+    && registryStatus.registry_authenticated
+    && managedIdentifierExists;
 
   res.json({
     org_did: orgDid || null,
     org_did_configured: orgDidConfigured,
-    registry_connected: registryConnected,
+    registry_connected: registryStatus.registry_connected,
+    registry_auth_configured: registryStatus.registry_auth_configured,
+    registry_authenticated: registryStatus.registry_authenticated,
+    registry_auth_error: registryStatus.registry_auth_error,
     managed_identifier_exists: managedIdentifierExists,
     ready_for_lifecycle: readyForLifecycle,
   });
@@ -420,12 +465,8 @@ app.get('/api/health', async (req, res) => {
     managedDids = ids.length;
   } catch (e) { /* */ }
 
-  let registryOk = false;
-  try {
-    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
-    const h = await client.health();
-    registryOk = h.status === 'ok';
-  } catch (e) { /* */ }
+  const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+  const registryStatus = await getRegistryStatus(client);
 
   res.json({
     status: agentOk ? 'ok' : 'degraded',
@@ -435,7 +476,10 @@ app.get('/api/health', async (req, res) => {
     signing_mode: process.env.SIGNING_MODE || 'local',
     managed_dids: managedDids,
     registry_url: REGISTRY_URL,
-    registry_connected: registryOk,
+    registry_connected: registryStatus.registry_connected,
+    registry_auth_configured: registryStatus.registry_auth_configured,
+    registry_authenticated: registryStatus.registry_authenticated,
+    registry_auth_error: registryStatus.registry_auth_error,
     capabilities: [
       'did:web', 'did:key',
       'JsonWebSignature2020', 'ES256K',

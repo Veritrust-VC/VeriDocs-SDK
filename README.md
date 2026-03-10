@@ -266,3 +266,64 @@ Setup flow for central registration:
 - `registry_auth_error`
 
 Readiness (`lifecycle_ready`/`ready_for_lifecycle`) requires an org DID plus registry connectivity and successful auth.
+
+## Central Sync Verification and Audit Logging
+
+### Register authentication
+
+The SDK authenticates against Register using:
+
+- `REGISTRY_URL`
+- `REGISTRY_EMAIL`
+- `REGISTRY_PASSWORD`
+
+Login is performed via `POST /api/v1/auth/login`. The SDK accepts either `access_token` or `token` in login responses.
+
+### Connected vs authenticated vs registered vs verified
+
+- **connected**: SDK can reach `GET /api/v1/health` on Register.
+- **authenticated**: SDK can login and cache bearer token.
+- **registered**: organization registration (`POST /api/v1/orgs`) completed.
+- **verified**: SDK can read organization back via `GET /api/v1/orgs/{org_did}`.
+
+`POST /api/setup/org` now creates/imports local DID, attempts remote registration, then verifies remote presence immediately.
+
+### Audit log database
+
+Sync and auth logs are persisted in SQLite:
+
+- default DB file: `/app/status-data/sdk_audit.db`
+- override with: `SDK_AUDIT_DB_FILE`
+
+Persistent Docker volume mapping should include:
+
+- `sdk-data:/app/status-data`
+
+### Trace ID propagation
+
+SDK accepts incoming `X-Trace-Id` headers. If absent, SDK generates a new trace ID and returns it in response headers/body.
+
+Trace IDs are written to all central sync audit rows and auth log rows.
+
+### Audit log API endpoints
+
+- `GET /api/audit/logs?limit=&offset=&action=&success=&trace_id=`
+- `GET /api/audit/logs/:id`
+- `GET /api/audit/summary`
+
+### Setup/Health truth fields
+
+`GET /api/setup/status` and `GET /api/health` include high-level sync truth fields:
+
+- `registry_connected`
+- `registry_auth_configured`
+- `registry_authenticated`
+- `org_registered_in_registry`
+- `org_verified_in_registry`
+- `last_sync_error`
+- `last_trace_id`
+
+### Additional environment variables
+
+- `SDK_STATE_FILE` — persisted local setup state JSON file.
+- `SDK_AUDIT_DB_FILE` *(optional)* — path to SQLite audit database.

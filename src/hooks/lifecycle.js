@@ -1,23 +1,9 @@
-/**
- * Lifecycle Hooks — the integration layer between a DVS and VeriDocs.
- * 
- * Each hook:
- *   1. Creates the appropriate lifecycle VC (signed locally or delegated)
- *   2. Submits the VC to the central VeriDocs Register
- *   3. Returns the VC and registry response
- * 
- * Usage from DVS:
- *   const hooks = require('./hooks/lifecycle');
- *   // On document creation:
- *   const result = await hooks.onDocumentCreated(docDid, { documentTitle: 'Application' });
- *   // On sending:
- *   const result = await hooks.onDocumentSent(docDid, recipientDid, { deliveryMethod: 'eAdrese' });
- */
-
 const { createLifecycleVC } = require('../vc-builder');
 const { createDocumentDID } = require('../did-manager');
 const { RegistryClient } = require('../registry-client');
 const { getActiveOrgDid } = require('../state-store');
+const { writeSyncLog } = require('../audit-db');
+const { newTraceId } = require('../trace');
 
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:8001';
 const REGISTRY_API_KEY = process.env.REGISTRY_API_KEY || '';
@@ -38,111 +24,147 @@ function requireOrgDid() {
   return did;
 }
 
-/**
- * Create a new document: generate DID, register with Registry, issue DocumentCreated VC.
- * @param {object} metadata - Document metadata (title, type, classification, etc.)
- * @returns {{ docDid, docMeta, vc, registry }}
- */
-async function createDocument(metadata) {
+function localLog(action, traceId, details = {}) {
+  writeSyncLog({
+    trace_id: traceId,
+    action,
+    source_system: 'veridocs-sdk',
+    target_system: 'sdk-local',
+    success: details.success !== false,
+    error_message: details.error_message || null,
+    request_payload_summary: details.request_payload_summary || null,
+    request_payload_json: details.request_payload_json || null,
+    response_body_summary: details.response_body_summary || null,
+    response_body_json: details.response_body_json || null,
+    local_entity_type: details.local_entity_type || null,
+    local_entity_did: details.local_entity_did || null,
+    source_org_did: details.source_org_did || null,
+  });
+}
+
+async function createDocument(metadata, options = {}) {
+  const traceId = options.traceId || newTraceId();
   const orgDid = requireOrgDid();
   const client = getRegistryClient();
 
-  // Generate document DID
   const docMeta = createDocumentDID(orgDid, metadata);
+  localLog('sdk.doc.local_create', traceId, {
+    request_payload_summary: 'local document DID creation',
+    request_payload_json: metadata,
+    response_body_json: docMeta,
+    local_entity_type: 'document',
+    local_entity_did: docMeta.did,
+    source_org_did: orgDid,
+  });
 
-  // Register document with central Registry
-  const regResult = await client.registerDocument(docMeta.did, orgDid, metadata);
+  const regResult = await client.registerDocument(docMeta.did, orgDid, metadata, {
+    traceId,
+    sourceOrgDid: orgDid,
+    actorType: 'sdk',
+    localEntityType: 'document',
+    localEntityDid: docMeta.did,
+  });
 
-  // Create and sign DocumentCreated VC
+  const verifyResult = await client.resolveDocument(docMeta.did, {
+    traceId,
+    sourceOrgDid: orgDid,
+    localEntityType: 'document',
+    localEntityDid: docMeta.did,
+  });
+
   const vc = await createLifecycleVC('DocumentCreated', docMeta.did, orgDid, {
     documentTitle: metadata.title || undefined,
     classification: metadata.classification || undefined,
     localRegistrationNumber: metadata.registrationNumber || undefined,
   });
 
-  // Submit VC to Registry
-  const eventResult = await client.submitEvent(vc);
+  localLog('sdk.event.vc_built', traceId, {
+    request_payload_summary: 'DocumentCreated VC built',
+    response_body_summary: vc.type ? vc.type.join(',') : 'vc',
+    local_entity_type: 'document',
+    local_entity_did: docMeta.did,
+    source_org_did: orgDid,
+  });
+
+  const eventResult = await client.submitEvent(vc, {
+    traceId,
+    sourceOrgDid: orgDid,
+    localEntityType: 'document',
+    localEntityDid: docMeta.did,
+  });
 
   return {
+    trace_id: traceId,
     docDid: docMeta.did,
     docUuid: docMeta.uuid,
     docMeta,
     vc,
-    registry: { document: regResult, event: eventResult },
+    registry: { document: regResult, verify: verifyResult, event: eventResult },
   };
 }
 
-/**
- * Hook: Document created in DVS (use when document already has a DID).
- */
-async function onDocumentCreated(documentDid, claims) {
+async function submitLifecycleEvent(eventType, documentDid, claims = {}, options = {}) {
+  const traceId = options.traceId || newTraceId();
   const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentCreated', documentDid, orgDid, claims || {});
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
+  const vc = await createLifecycleVC(eventType, documentDid, orgDid, claims || {});
+
+  localLog('sdk.event.vc_built', traceId, {
+    request_payload_summary: `${eventType} VC built`,
+    local_entity_type: 'document',
+    local_entity_did: documentDid,
+    source_org_did: orgDid,
+  });
+
+  const eventResult = await getRegistryClient().submitEvent(vc, {
+    traceId,
+    sourceOrgDid: orgDid,
+    localEntityType: 'document',
+    localEntityDid: documentDid,
+  });
+
+  return { trace_id: traceId, vc, registry: eventResult };
 }
 
-/**
- * Hook: Document sent to another organization.
- */
-async function onDocumentSent(documentDid, recipientDid, claims) {
-  const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentSent', documentDid, orgDid, {
+async function onDocumentCreated(documentDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentCreated', documentDid, claims || {}, options);
+}
+
+async function onDocumentSent(documentDid, recipientDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentSent', documentDid, {
     recipientOrganization: recipientDid,
     ...claims,
-  });
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
+  }, options);
 }
 
-/**
- * Hook: Document received from another organization.
- */
-async function onDocumentReceived(documentDid, senderDid, claims) {
-  const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentReceived', documentDid, orgDid, {
+async function onDocumentReceived(documentDid, senderDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentReceived', documentDid, {
     senderOrganization: senderDid,
     ...claims,
+  }, options);
+}
+
+async function onDocumentAssigned(documentDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentAssigned', documentDid, claims || {}, options);
+}
+
+async function onDocumentDecided(documentDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentDecided', documentDid, claims || {}, options);
+}
+
+async function onDocumentArchived(documentDid, claims, options = {}) {
+  return submitLifecycleEvent('DocumentArchived', documentDid, claims || {}, options);
+}
+
+async function trackDocument(documentDid, options = {}) {
+  const traceId = options.traceId || newTraceId();
+  const orgDid = getConfiguredOrgDid();
+  const result = await getRegistryClient().trackDocument(documentDid, {
+    traceId,
+    sourceOrgDid: orgDid || null,
+    localEntityType: 'document',
+    localEntityDid: documentDid,
   });
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
-}
-
-/**
- * Hook: Document assigned to person/department.
- */
-async function onDocumentAssigned(documentDid, claims) {
-  const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentAssigned', documentDid, orgDid, claims || {});
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
-}
-
-/**
- * Hook: Decision made on document.
- */
-async function onDocumentDecided(documentDid, claims) {
-  const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentDecided', documentDid, orgDid, claims || {});
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
-}
-
-/**
- * Hook: Document archived.
- */
-async function onDocumentArchived(documentDid, claims) {
-  const orgDid = requireOrgDid();
-  const vc = await createLifecycleVC('DocumentArchived', documentDid, orgDid, claims || {});
-  const eventResult = await getRegistryClient().submitEvent(vc);
-  return { vc, registry: eventResult };
-}
-
-/**
- * Track document via Registry.
- */
-async function trackDocument(documentDid) {
-  return getRegistryClient().trackDocument(documentDid);
+  return { trace_id: traceId, ...result };
 }
 
 module.exports = {

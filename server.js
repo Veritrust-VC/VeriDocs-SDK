@@ -119,11 +119,9 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
       source_org_did: orgResult.did,
     });
 
-    const agent = await agentReady;
-    const resolution = await agent.resolveDid({ didUrl: orgResult.did });
-    const didDocument = resolution.didDocument;
+    const didDocument = orgResult.didDocument;
 
-    if (!didDocument) throw new Error('Organization DID document resolution failed');
+    if (!didDocument) throw new Error('Organization DID document generation failed');
 
     const publicKeyHex = orgResult.keys && orgResult.keys[0] && orgResult.keys[0].publicKeyHex;
 

@@ -529,7 +529,12 @@ app.get('/api/identifiers', requireApiKey, async (req, res) => {
 app.get('/api/audit/logs', async (req, res) => {
   const { limit, offset, action, success, trace_id } = req.query;
   const rows = listSyncLogs({ limit, offset, action, success, trace_id });
-  res.json({ rows, count: rows.length });
+  res.json({
+    items: rows,
+    total: rows.length,
+    limit: Number(limit) || 50,
+    offset: Number(offset) || 0,
+  });
 });
 
 app.get('/api/audit/logs/:id', async (req, res) => {

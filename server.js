@@ -22,6 +22,8 @@ const {
   getSyncLog,
   setSyncState,
   getSyncState,
+  setOrgSyncState,
+  getOrgSyncState,
 } = require('./src/audit-db');
 const { newTraceId, nowIso } = require('./src/trace');
 
@@ -200,6 +202,11 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
     setSyncState('org_verified_in_registry', String(!!registryResult.verified));
     setSyncState('last_sync_error', registryResult.error || '');
 
+    setOrgSyncState('org_registered_in_registry', orgResult.did, String(!!registryResult.registered));
+    setOrgSyncState('org_verified_in_registry', orgResult.did, String(!!registryResult.verified));
+    setOrgSyncState('last_sync_error', orgResult.did, registryResult.error || '');
+    setOrgSyncState('last_setup_trace_id', orgResult.did, traceId);
+
     const lastSetup = {
       orgCode,
       orgName,
@@ -242,7 +249,8 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
 
 app.get('/api/setup/status', async (req, res) => {
   const traceId = req.traceId;
-  const orgDid = getActiveOrgDid() || process.env.ORG_DID || '';
+  const requestedOrgDid = req.query.orgDid || '';
+  const orgDid = requestedOrgDid || getActiveOrgDid() || process.env.ORG_DID || '';
   const lastSetup = getLastSetup();
   const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
   const registryStatus = await getRegistryStatus(client, traceId);
@@ -253,12 +261,22 @@ app.get('/api/setup/status', async (req, res) => {
     managedDids = ids.map(i => ({ did: i.did, alias: i.alias }));
   } catch (_e) { }
 
+  const orgRegisteredState = getOrgSyncState('org_registered_in_registry', orgDid);
+  const orgVerifiedState = getOrgSyncState('org_verified_in_registry', orgDid);
+  const orgLastErrorState = getOrgSyncState('last_sync_error', orgDid);
+  const orgLastTraceState = getOrgSyncState('last_setup_trace_id', orgDid);
+
+  const orgRegistered = orgRegisteredState ? orgRegisteredState.value === 'true' : registryStatus.org_registered_in_registry;
+  const orgVerified = orgVerifiedState ? orgVerifiedState.value === 'true' : registryStatus.org_verified_in_registry;
+  const orgLastError = orgLastErrorState ? orgLastErrorState.value : registryStatus.last_sync_error;
+  const orgLastTrace = orgLastTraceState ? orgLastTraceState.value : registryStatus.last_trace_id;
+
   const lifecycleReady = !!orgDid
     && registryStatus.registry_connected
     && registryStatus.registry_auth_configured
     && registryStatus.registry_authenticated
-    && registryStatus.org_registered_in_registry
-    && registryStatus.org_verified_in_registry;
+    && orgRegistered
+    && orgVerified;
 
   res.json({
     org_did: orgDid || null,
@@ -270,11 +288,11 @@ app.get('/api/setup/status', async (req, res) => {
     registry_connected: registryStatus.registry_connected,
     registry_auth_configured: registryStatus.registry_auth_configured,
     registry_authenticated: registryStatus.registry_authenticated,
-    last_sync_error: registryStatus.last_sync_error || null,
+    last_sync_error: orgLastError || null,
     active_org_did: orgDid || null,
-    org_registered_in_registry: registryStatus.org_registered_in_registry,
-    org_verified_in_registry: registryStatus.org_verified_in_registry,
-    last_trace_id: registryStatus.last_trace_id,
+    org_registered_in_registry: orgRegistered,
+    org_verified_in_registry: orgVerified,
+    last_trace_id: orgLastTrace || traceId,
     lifecycle_ready: lifecycleReady,
     managed_dids: managedDids,
     last_setup: lastSetup,

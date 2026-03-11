@@ -211,6 +211,18 @@ function getSyncState(key) {
   return conn.prepare('SELECT key, value, updated_at FROM sync_state WHERE key = ?').get(key) || null;
 }
 
+function syncStateKey(baseKey, orgDid) {
+  return orgDid ? `${baseKey}:${orgDid}` : baseKey;
+}
+
+function setOrgSyncState(baseKey, orgDid, value) {
+  return setSyncState(syncStateKey(baseKey, orgDid), value);
+}
+
+function getOrgSyncState(baseKey, orgDid) {
+  return getSyncState(syncStateKey(baseKey, orgDid));
+}
+
 module.exports = {
   initAuditDb,
   writeSyncLog,
@@ -219,4 +231,7 @@ module.exports = {
   getSyncLog,
   setSyncState,
   getSyncState,
+  syncStateKey,
+  setOrgSyncState,
+  getOrgSyncState,
 };

@@ -173,21 +173,36 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
         );
         registryResult.registered = true;
         registryResult.last_response_body = registerResp;
-
-        const verifyResp = await client.resolveOrganization(orgResult.did, {
-          traceId,
-          sourceOrgCode: orgCode,
-          sourceOrgDid: orgResult.did,
-          actorType: 'sdk',
-          localEntityType: 'organization',
-          localEntityDid: orgResult.did,
-          remoteEntityDid: orgResult.did,
-          action: 'sdk.org.verify_remote',
-        });
-        registryResult.verified = !!verifyResp;
       } catch (regErr) {
-        registryResult.error = regErr.message;
-        registryResult.last_response_body = regErr.message;
+        const msg = regErr?.message || '';
+        registryResult.last_response_body = msg;
+
+        if (msg.includes('HTTP 409') && msg.includes('already registered')) {
+          registryResult.registered = true;
+          registryResult.error = null;
+        } else {
+          registryResult.error = msg;
+        }
+      }
+
+      if (registryResult.registered) {
+        try {
+          const verifyResp = await client.resolveOrganization(orgResult.did, {
+            traceId,
+            sourceOrgCode: orgCode,
+            sourceOrgDid: orgResult.did,
+            actorType: 'sdk',
+            localEntityType: 'organization',
+            localEntityDid: orgResult.did,
+            remoteEntityDid: orgResult.did,
+            action: 'sdk.org.verify_remote',
+          });
+          registryResult.verified = !!verifyResp;
+        } catch (verifyErr) {
+          registryResult.verified = false;
+          registryResult.error = verifyErr.message;
+          registryResult.last_response_body = verifyErr.message;
+        }
       }
     }
 

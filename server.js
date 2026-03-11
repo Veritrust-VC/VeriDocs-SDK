@@ -262,6 +262,8 @@ app.get('/api/setup/status', async (req, res) => {
 
   res.json({
     org_did: orgDid || null,
+    selected_org_did: orgDid || null,
+    default_org_did: orgDid || null,
     org_did_configured: !!orgDid,
     signing_mode: process.env.SIGNING_MODE || 'local',
     registry_url: REGISTRY_URL,
@@ -277,6 +279,50 @@ app.get('/api/setup/status', async (req, res) => {
     managed_dids: managedDids,
     last_setup: lastSetup,
   });
+});
+
+app.post('/api/setup/select-org', requireApiKey, async (req, res) => {
+  const { orgDid } = req.body || {};
+  const traceId = req.traceId;
+
+  try {
+    if (!orgDid) {
+      setActiveOrgDid(null);
+      return res.json({
+        status: 'ok',
+        active_org_did: null,
+        trace_id: traceId,
+        message: 'Active organization cleared',
+      });
+    }
+
+    const ids = await listIdentifiers();
+    const match = ids.find(i => i.did === orgDid);
+    if (!match) {
+      return res.status(404).json({
+        error: 'Managed DID not found in SDK',
+        detail: `No local managed identifier for ${orgDid}`,
+        trace_id: traceId,
+      });
+    }
+
+    setActiveOrgDid(orgDid);
+
+    const state = getLastSetup() || null;
+    return res.json({
+      status: 'ok',
+      active_org_did: orgDid,
+      trace_id: traceId,
+      last_setup: state,
+      message: 'Active organization switched',
+    });
+  } catch (err) {
+    return res.status(500).json({
+      error: 'Failed to switch active organization',
+      detail: err.message,
+      trace_id: traceId,
+    });
+  }
 });
 
 

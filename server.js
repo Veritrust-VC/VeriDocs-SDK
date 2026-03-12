@@ -31,8 +31,42 @@ const PORT = parseInt(process.env.PORT || process.env.SDK_PORT || '3100', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const REGISTRY_URL = process.env.REGISTRY_URL || 'http://localhost:8001';
 const REGISTRY_API_KEY = process.env.REGISTRY_API_KEY || '';
+const ORG_VC_PATH = path.join(__dirname, 'data', 'org_vcs.json');
 
 initAuditDb();
+
+function ensureOrgVcStore() {
+  const dir = path.dirname(ORG_VC_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
+
+function loadOrgVcDb() {
+  ensureOrgVcStore();
+  if (!fs.existsSync(ORG_VC_PATH)) return {};
+
+  try {
+    const raw = fs.readFileSync(ORG_VC_PATH, 'utf8');
+    if (!raw.trim()) return {};
+    return JSON.parse(raw);
+  } catch (_err) {
+    return {};
+  }
+}
+
+function saveOrgVC(orgDid, vc) {
+  if (!orgDid || !vc) return;
+  const db = loadOrgVcDb();
+  db[orgDid] = vc;
+  fs.writeFileSync(ORG_VC_PATH, JSON.stringify(db, null, 2));
+}
+
+function loadOrgVC(orgDid) {
+  if (!orgDid) return null;
+  const db = loadOrgVcDb();
+  return db[orgDid] || null;
+}
 
 function isRegistryAuthConfigured() {
   return !!(process.env.REGISTRY_EMAIL && process.env.REGISTRY_PASSWORD);
@@ -173,6 +207,12 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
         );
         registryResult.registered = true;
         registryResult.last_response_body = registerResp;
+
+        if (registerResp?.registration_vc) {
+          registryResult.registration_vc = registerResp.registration_vc;
+          registryResult.verified = true;
+          saveOrgVC(orgResult.did, registerResp.registration_vc);
+        }
       } catch (regErr) {
         const msg = regErr?.message || '';
         registryResult.last_response_body = msg;
@@ -185,7 +225,7 @@ app.post('/api/setup/org', requireApiKey, async (req, res) => {
         }
       }
 
-      if (registryResult.registered) {
+      if (registryResult.registered && !registryResult.verified) {
         try {
           const verifyResp = await client.resolveOrganization(orgResult.did, {
             traceId,
@@ -307,6 +347,7 @@ app.get('/api/setup/status', async (req, res) => {
     active_org_did: orgDid || null,
     org_registered_in_registry: orgRegistered,
     org_verified_in_registry: orgVerified,
+    registration_vc_present: !!loadOrgVC(orgDid),
     last_trace_id: orgLastTrace || traceId,
     lifecycle_ready: lifecycleReady,
     managed_dids: managedDids,

@@ -113,9 +113,23 @@ curl http://localhost:3100/api/documents/{docDid}/track
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/health` | Health check including registry connectivity/authentication summary |
+| `GET` | `/api/health` | Health check including registry + AI node summary |
 | `GET` | `/.well-known/did.json` | This agent's DID Document |
 | `GET` | `/contexts/*.jsonld` | JSON-LD context files |
+
+
+### AI (existing + new local AI node endpoints)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/ai/health` | Existing AI capability health for routing/harmonization |
+| `GET` | `/api/ai/status` | Extended AI node status (`ai_enabled`, extractor/anonymizer availability, route availability) |
+| `POST` | `/api/ai/routing` | Existing intelligent routing endpoint (unchanged) |
+| `POST` | `/api/ai/harmonize` | Existing status harmonization endpoint (unchanged) |
+| `POST` | `/api/ai/map-status` | Existing status mapping endpoint (unchanged) |
+| `POST` | `/api/ai/anonymize` | Local anonymization utility for text payloads |
+| `POST` | `/api/ai/extract-summary` | Multipart upload endpoint: local extraction + anonymization + LLM routing + semantic summary validation |
+
 
 ## Signing Modes
 
@@ -151,6 +165,15 @@ DELEGATE_API_KEY=your-registry-api-key
 | `DELEGATE_API_KEY` | | API key for delegate signing |
 | `VERAMO_API_KEY` | | API key for SDK endpoints |
 | `SDK_PORT` | `3100` | SDK server port |
+| `AI_ENABLED` | `true` | Enable/disable local AI processing pipeline |
+| `AI_CENTRAL_LLM_URL` | `/api/v1/ai/llm/complete` | Register central LLM completion path |
+| `AI_LOCAL_OLLAMA_URL` | | Local Ollama HTTP endpoint |
+| `AI_FALLBACK_PROVIDER` | `none` | Fallback provider (`azure` supported) |
+| `AI_AZURE_ENDPOINT` | | Azure OpenAI endpoint for fallback |
+| `AI_AZURE_API_KEY` | | Azure API key |
+| `AI_NER_LANGUAGE` | `en` | Language hint for anonymizer/NER |
+| `AI_DEBUG_RETURN_EXTRACTED_TEXT` | `false` | Include extracted text in `/api/ai/extract-summary` response for debugging |
+| `AI_MAX_EXTRACTED_CHARS` | `8000` | Max extracted chars sent to summarization |
 
 ## Project Structure
 
@@ -327,3 +350,16 @@ Trace IDs are written to all central sync audit rows and auth log rows.
 
 - `SDK_STATE_FILE` — persisted local setup state JSON file.
 - `SDK_AUDIT_DB_FILE` *(optional)* — path to SQLite audit database.
+
+
+## OpenDMS AI Integration Flow (March 2026 concept)
+
+1. OpenDMS uploads a file to `POST /api/ai/extract-summary` with lightweight metadata hints.
+2. SDK extracts text locally (PDF/DOCX/TXT/RTF/ODT) and anonymizes locally.
+3. SDK routes to central/local/fallback LLM based on sensitivity policy and availability.
+4. SDK validates and clamps semantic summary fields to safe bounds.
+5. OpenDMS presents summary for human review/approval.
+6. OpenDMS calls `POST /api/documents/create` and may include approved `semanticSummary` and `sensitivityControl`.
+7. SDK submits `DocumentCreated` VC that includes `metadata`, `semanticSummary`, and `sensitivityControl` while preserving existing lifecycle behavior.
+
+> Raw uploaded file bytes and full extracted content stay local to the SDK node. Only policy-allowed AI payloads and approved summary metadata are sent centrally.

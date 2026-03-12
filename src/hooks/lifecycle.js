@@ -73,6 +73,9 @@ async function createDocument(metadata, options = {}) {
   });
 
   const vc = await createLifecycleVC('DocumentCreated', docMeta.did, orgDid, {
+    metadata: metadata || {},
+    semanticSummary: metadata.semanticSummary || undefined,
+    sensitivityControl: metadata.sensitivityControl || undefined,
     documentTitle: metadata.title || undefined,
     classification: metadata.classification || undefined,
     localRegistrationNumber: metadata.registrationNumber || undefined,

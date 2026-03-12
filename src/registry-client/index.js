@@ -262,6 +262,57 @@ class RegistryClient {
     });
   }
 
+  async aiComplete(payload, meta = {}) {
+    return this.registryFetch('/api/v1/ai/llm/complete', {
+      method: 'POST',
+      body: JSON.stringify(payload || {}),
+    }, {
+      ...meta,
+      action: meta.action || 'sdk.ai.complete',
+      remoteEntityType: 'ai',
+    });
+  }
+
+  async findSimilar(queryPayload, meta = {}) {
+    return this.registryFetch('/api/v1/ai/search/similar', {
+      method: 'POST',
+      body: JSON.stringify(queryPayload || {}),
+    }, {
+      ...meta,
+      action: meta.action || 'sdk.ai.find_similar',
+      remoteEntityType: 'ai',
+    });
+  }
+
+  async getTopicTrends(params = {}, meta = {}) {
+    const query = new URLSearchParams(params).toString();
+    return this.registryFetch(`/api/v1/ai/topics/trends${query ? `?${query}` : ''}`, { method: 'GET' }, {
+      ...meta,
+      action: meta.action || 'sdk.ai.topic_trends',
+      remoteEntityType: 'ai',
+    });
+  }
+
+  async getWarnings(params = {}, meta = {}) {
+    const query = new URLSearchParams(params).toString();
+    return this.registryFetch(`/api/v1/ai/warnings${query ? `?${query}` : ''}`, { method: 'GET' }, {
+      ...meta,
+      action: meta.action || 'sdk.ai.warnings',
+      remoteEntityType: 'ai',
+    });
+  }
+
+  async getBriefing(payload = {}, meta = {}) {
+    return this.registryFetch('/api/v1/ai/briefing', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }, {
+      ...meta,
+      action: meta.action || 'sdk.ai.briefing',
+      remoteEntityType: 'ai',
+    });
+  }
+
   getCachedTokenMetadata() {
     return {
       registry_token_cached: !!registryToken,

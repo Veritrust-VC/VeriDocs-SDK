@@ -36,6 +36,7 @@ describe('SDK Setup', () => {
     assert.ok('registry_connected' in body);
     assert.ok('signing_mode' in body);
     assert.ok('last_setup' in body);
+    assert.ok('registration_vc_present' in body);
   });
 
 

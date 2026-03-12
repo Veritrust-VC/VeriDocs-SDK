@@ -54,6 +54,12 @@ async function createLifecycleVC(eventType, documentDid, issuerDid, claims, stat
     ...claims,
   };
 
+  if (eventType === 'DocumentCreated') {
+    credentialSubject.metadata = claims && claims.metadata ? claims.metadata : {};
+    credentialSubject.semanticSummary = claims && claims.semanticSummary ? claims.semanticSummary : null;
+    credentialSubject.sensitivityControl = claims && claims.sensitivityControl ? claims.sensitivityControl : null;
+  }
+
   // Build the credential
   const credential = {
     '@context': [

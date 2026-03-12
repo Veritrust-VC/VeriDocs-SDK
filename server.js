@@ -26,6 +26,9 @@ const {
   getOrgSyncState,
 } = require('./src/audit-db');
 const { newTraceId, nowIso } = require('./src/trace');
+const multer = require('multer');
+const os = require('os');
+const { extractAndSummarize, anonymizeText, getAiStatus } = require('./src/ai/agent');
 
 const PORT = parseInt(process.env.PORT || process.env.SDK_PORT || '3100', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -106,6 +109,7 @@ const agentReady = createAgentInstance().catch(err => {
 });
 
 const app = express();
+const upload = multer({ dest: path.join(os.tmpdir(), 'veridocs-sdk-uploads') });
 app.use(express.json({ limit: '5mb' }));
 
 app.use((req, res, next) => {
@@ -434,9 +438,20 @@ app.get('/api/setup/verify', async (req, res) => {
 });
 
 app.post('/api/documents/create', requireApiKey, async (req, res) => {
-  const { title, type, classification, registrationNumber, metadata } = req.body || {};
+  const { title, type, classification, registrationNumber, metadata, semanticSummary, sensitivityControl } = req.body || {};
   try {
-    const result = await hooks.createDocument({ title, type, classification, registrationNumber, ...(metadata || {}) }, { traceId: req.traceId });
+    const mergedMetadata = {
+      title,
+      type,
+      classification,
+      registrationNumber,
+      ...(metadata || {}),
+    };
+
+    if (semanticSummary) mergedMetadata.semanticSummary = semanticSummary;
+    if (sensitivityControl) mergedMetadata.sensitivityControl = sensitivityControl;
+
+    const result = await hooks.createDocument(mergedMetadata, { traceId: req.traceId });
     res.status(201).json(result);
   } catch (err) {
     res.status(500).json({ error: 'Document creation failed', detail: err.message, trace_id: req.traceId });
@@ -516,6 +531,52 @@ const { isConfigured: aiConfigured, getConfig: aiConfig } = require('./src/ai/ll
 
 app.get('/api/ai/health', (req, res) => {
   res.json({ ai_available: aiConfigured(), provider: aiConfig().provider, model: aiConfig().model, capabilities: ['intelligent_routing', 'status_harmonization'] });
+});
+
+app.get('/api/ai/status', async (req, res) => {
+  const status = getAiStatus();
+  res.json(status);
+});
+
+app.post('/api/ai/anonymize', requireApiKey, async (req, res) => {
+  const { text } = req.body || {};
+  if (!text || typeof text !== 'string') return res.status(400).json({ error: 'Required: text' });
+  try {
+    const result = await anonymizeText(text);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Anonymization failed', detail: err.message });
+  }
+});
+
+app.post('/api/ai/extract-summary', requireApiKey, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Required: file' });
+
+  let metadata = {};
+  if (req.body && req.body.metadata) {
+    try {
+      metadata = JSON.parse(req.body.metadata);
+    } catch (_e) {
+      return res.status(400).json({ error: 'metadata must be valid JSON string' });
+    }
+  }
+
+  try {
+    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+    const result = await extractAndSummarize({ filePath: req.file.path, metadata, registryClient: client });
+    const body = {
+      semanticSummary: result.semanticSummary,
+      sensitivityControl: result.sensitivityControl,
+      confidence: result.confidence,
+      routeUsed: result.routeUsed,
+    };
+    if (process.env.AI_DEBUG_RETURN_EXTRACTED_TEXT === 'true') body.extractedText = result.extractedText;
+    res.json(body);
+  } catch (err) {
+    res.status(500).json({ error: 'Extract/summary failed', detail: err.message });
+  } finally {
+    fs.unlink(req.file.path, () => {});
+  }
 });
 
 app.post('/api/ai/routing', requireApiKey, async (req, res) => {
@@ -634,6 +695,8 @@ app.get('/api/health', async (req, res) => {
   const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
   const registryStatus = await getRegistryStatus(client, req.traceId);
 
+  const aiStatus = getAiStatus();
+
   res.json({
     status: agentOk ? 'ok' : 'degraded',
     service: 'veridocs-sdk',
@@ -649,6 +712,13 @@ app.get('/api/health', async (req, res) => {
     org_verified_in_registry: registryStatus.org_verified_in_registry,
     last_sync_error: registryStatus.last_sync_error || null,
     last_trace_id: registryStatus.last_trace_id || req.traceId,
+    ai_enabled: aiStatus.ai_enabled,
+    extractor_available: aiStatus.extractor_available,
+    anonymizer_available: aiStatus.anonymizer_available,
+    central_llm_available: aiStatus.central_llm_available,
+    local_llm_available: aiStatus.local_llm_available,
+    fallback_provider: aiStatus.fallback_provider,
+    semantic_summary_supported: true,
   });
 });
 

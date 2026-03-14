@@ -95,21 +95,82 @@ async function createLifecycleVC(eventType, documentDid, issuerDid, claims, stat
 }
 
 /**
+ * Resolve the Veramo managed identifier for an org DID.
+ *
+ * The SDK creates DIDs using the did:key provider (for Secp256k1 key generation)
+ * but externally uses did:web identifiers. Veramo's store therefore contains
+ * did:key:z... entries with alias 'orgkey-{code}', NOT did:web:... entries.
+ *
+ * This function bridges the gap by:
+ *   1. Trying direct did:web lookup (works if DID was imported as did:web)
+ *   2. Falling back to alias-based lookup using the org code from the DID
+ *   3. Falling back to scanning all managed identifiers by alias pattern
+ */
+async function _resolveIdentifier(agent, issuerDid) {
+  // 1. Try direct lookup (works if the DID was created/imported as did:web)
+  try {
+    return await agent.didManagerGet({ did: issuerDid });
+  } catch (_e) {
+    // Not found by did:web — expected when SDK used did:key provider
+  }
+
+  // 2. Extract org code from did:web:domain:org:{code} and try alias lookup
+  const parts = issuerDid.split(':');
+  const orgIdx = parts.indexOf('org');
+  const orgCode = orgIdx >= 0 && parts[orgIdx + 1] ? parts[orgIdx + 1] : null;
+
+  if (orgCode) {
+    const keyAlias = `orgkey-${orgCode}`;
+    try {
+      return await agent.didManagerGet({ alias: keyAlias });
+    } catch (_e) {
+      // Not found by primary alias
+    }
+
+    // Also try just the org code as alias (older SDK versions)
+    try {
+      return await agent.didManagerGet({ alias: orgCode });
+    } catch (_e) {
+      // Not found
+    }
+  }
+
+  // 3. Scan all managed identifiers for alias match
+  const allIdentifiers = await agent.didManagerFind();
+
+  if (orgCode) {
+    const keyAlias = `orgkey-${orgCode}`;
+    const byAlias = allIdentifiers.find(
+      i => i.alias === keyAlias || i.alias === orgCode
+    );
+    if (byAlias) return byAlias;
+  }
+
+  // 4. Last resort — if only one identifier exists, use it
+  if (allIdentifiers.length === 1) {
+    console.warn(
+      `[VC Builder] Single managed DID fallback: using ${allIdentifiers[0].did} for ${issuerDid}`
+    );
+    return allIdentifiers[0];
+  }
+
+  throw new Error(
+    `Issuer DID not managed by this agent: ${issuerDid}. ` +
+    `Managed DIDs: ${allIdentifiers.map(i => `${i.did} (alias: ${i.alias})`).join(', ') || 'none'}`
+  );
+}
+
+/**
  * Sign locally using this agent's Veramo instance.
  */
 async function _signLocal(credential, issuerDid) {
   const agent = await getAgent();
 
-  // Get the issuer's managed identifier
-  let ident;
-  try {
-    ident = await agent.didManagerGet({ did: issuerDid });
-  } catch (e) {
-    throw new Error(`Issuer DID not managed by this agent: ${issuerDid}`);
-  }
+  // Resolve the managed identifier (handles did:key ↔ did:web mismatch)
+  const ident = await _resolveIdentifier(agent, issuerDid);
 
   const key = ident.keys && ident.keys[0];
-  if (!key) throw new Error(`No signing key found for ${issuerDid}`);
+  if (!key) throw new Error(`No signing key found for ${issuerDid} (resolved via ${ident.did})`);
 
   const verificationMethod = key.kid;
 

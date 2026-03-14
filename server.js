@@ -624,6 +624,83 @@ app.post('/api/did/resolve', async (req, res) => {
   }
 });
 
+// Resolve org DID through Registry API (bypasses Veramo did:web which needs public internet)
+app.get('/api/registry/org/:did', async (req, res) => {
+  const did = decodeURIComponent(req.params.did);
+  const traceId = req.traceId;
+  try {
+    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+    const result = await client.resolveOrganization(did, {
+      traceId,
+      sourceOrgDid: getActiveOrgDid(),
+      actorType: 'sdk',
+      action: 'sdk.org.resolve_registry',
+    });
+    const vc = loadOrgVC(did);
+    res.json({
+      ...result,
+      registration_vc: vc || null,
+      trace_id: traceId,
+    });
+  } catch (err) {
+    res.status(502).json({
+      error: 'Registry org resolve failed',
+      detail: err.message,
+      trace_id: traceId,
+    });
+  }
+});
+
+// Re-request registration — tries to recover VC for already-registered orgs
+app.post('/api/registry/org/:did/re-register', requireApiKey, async (req, res) => {
+  const did = decodeURIComponent(req.params.did);
+  const traceId = req.traceId;
+  try {
+    const client = new RegistryClient(REGISTRY_URL, REGISTRY_API_KEY);
+    const resolved = await client.resolveOrganization(did, {
+      traceId,
+      action: 'sdk.org.resolve_for_vc',
+    });
+    let vc = loadOrgVC(did);
+    if (vc) {
+      return res.json({
+        did, registration_vc: vc, registration_vc_source: 'cached',
+        resolved, trace_id: traceId,
+      });
+    }
+    const ids = await listIdentifiers();
+    const match = ids.find(i => i.did === did || (i.alias && i.alias.includes(did.split(':').pop())));
+    if (!match) {
+      return res.status(404).json({
+        error: 'No local managed key found for this DID', trace_id: traceId,
+      });
+    }
+    const didDocument = resolved.did_document || resolved.didDocument;
+    const publicKeyHex = match.keys?.[0]?.publicKeyHex || '';
+    try {
+      const registerResp = await client.registerOrganization(
+        didDocument, publicKeyHex, resolved.name || '', resolved.description || '',
+        { traceId, action: 'sdk.org.re_register_for_vc' }
+      );
+      if (registerResp?.registration_vc) {
+        saveOrgVC(did, registerResp.registration_vc);
+        vc = registerResp.registration_vc;
+      }
+    } catch (regErr) {
+      if (!regErr.message?.includes('409')) throw regErr;
+    }
+    res.json({
+      did, registration_vc: vc || null,
+      registration_vc_source: vc ? 're-registered' : 'unavailable',
+      resolved,
+      message: vc ? 'Registration VC retrieved' : 'Org registered but VC not available (was not captured during initial registration).',
+      trace_id: traceId,
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'Re-registration failed', detail: err.message, trace_id: traceId });
+  }
+});
+
 app.post('/api/vc/verify', async (req, res) => {
   const { credential } = req.body || {};
   if (!credential) return res.status(400).json({ error: 'Missing "credential"' });

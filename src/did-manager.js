@@ -4,13 +4,10 @@
  * Organization DID: did:web:{domain}:org:{code}
  * Document DID:     did:web:{domain}:doc:{uuid}
  * 
- * Uses the same Veramo agent and key management as VeriTrust.
- * 
- * Key design: We create keys via did:key provider (reliable Secp256k1 generation),
- * then ALSO import a did:web DID pointing to the same key. This means Veramo
- * manages BOTH did:key:z... AND did:web:domain:org:code for the same key pair.
- * The did:web is what goes into VCs as the issuer; the did:key is the internal
- * key generation mechanism.
+ * Key design: We generate Secp256k1 key pairs ourselves using @noble/curves,
+ * then import the did:web DID directly into Veramo with full key material
+ * (including privateKeyHex). This means Veramo manages did:web natively —
+ * no did:key intermediary, no import issues.
  */
 
 const crypto = require('crypto');
@@ -67,7 +64,7 @@ function publicKeyHexToSecp256k1Jwk(publicKeyHex) {
   };
 }
 
-function buildCanonicalDidDocument(did, key) {
+function buildCanonicalDidDocument(did, publicKeyHex) {
   return {
     '@context': [
       'https://www.w3.org/ns/did/v1',
@@ -79,7 +76,7 @@ function buildCanonicalDidDocument(did, key) {
         id: `${did}#key-1`,
         type: 'JsonWebKey2020',
         controller: did,
-        publicKeyJwk: publicKeyHexToSecp256k1Jwk(key.publicKeyHex),
+        publicKeyJwk: publicKeyHexToSecp256k1Jwk(publicKeyHex),
       },
     ],
     authentication: [`${did}#key-1`],
@@ -90,9 +87,8 @@ function buildCanonicalDidDocument(did, key) {
 /**
  * Create an organization DID and register it with the Veramo agent.
  * 
- * Creates a did:key for key generation, then imports a did:web DID
- * pointing to the same key — so Veramo manages both, and the did:web
- * can be used as VC issuer.
+ * Generates a Secp256k1 key pair directly, then imports a did:web DID
+ * with full key material. No did:key intermediary.
  * 
  * @param {string} orgCode - Organization code (e.g., 'ACME-001')
  * @param {string} [alias] - Human-readable alias
@@ -105,19 +101,20 @@ async function createOrganizationDID(orgCode, alias) {
 
   const didWeb = `did:web:${REGISTRY_DOMAIN}:org:${normalizedOrgCode}`;
   const keyAlias = `orgkey-${normalizedOrgCode}`;
-  const identifiers = await agent.didManagerFind();
+  const keyKid = `${keyAlias}-key`;
 
   // Check if did:web already exists as a managed DID
+  const identifiers = await agent.didManagerFind();
   const existingWeb = identifiers.find((i) => i.did === didWeb);
   if (existingWeb) {
     const primaryKey = existingWeb.keys && existingWeb.keys[0];
     if (!primaryKey) throw new Error(`No key material found for ${didWeb}`);
-    const didDocument = buildCanonicalDidDocument(didWeb, primaryKey);
+    const didDocument = buildCanonicalDidDocument(didWeb, primaryKey.publicKeyHex);
     return {
       did: didWeb,
       didDocument,
       alias: alias || normalizedOrgCode,
-      controllerKeyId: existingWeb.controllerKeyId,
+      controllerKeyId: existingWeb.controllerKeyId || (primaryKey && primaryKey.kid),
       keys: (existingWeb.keys || []).map(k => ({
         kid: k.kid, type: k.type, publicKeyHex: k.publicKeyHex,
       })),
@@ -125,68 +122,58 @@ async function createOrganizationDID(orgCode, alias) {
     };
   }
 
-  // Check if did:key with the alias already exists (from a previous partial setup)
-  const existingKey = identifiers.find((i) => i.alias === keyAlias);
-
-  let keyIdentifier;
-  if (existingKey) {
-    keyIdentifier = existingKey;
-    console.log(`[DID Manager] Reusing existing did:key ${existingKey.did} (alias: ${keyAlias})`);
-  } else {
-    // Create fresh key pair via did:key provider
-    keyIdentifier = await agent.didManagerCreate({
-      provider: 'did:key',
-      alias: keyAlias,
-      kms: 'local',
-      options: { keyType: 'Secp256k1' },
-    });
-    console.log(`[DID Manager] Created did:key ${keyIdentifier.did} (alias: ${keyAlias})`);
-  }
-
-  const primaryKey = keyIdentifier.keys && keyIdentifier.keys[0];
-  if (!primaryKey) throw new Error(`No key material found for organization DID ${didWeb}`);
-
-  // Import did:web DID pointing to the same key
-  // This makes Veramo manage the did:web, so it can be used as VC issuer
-  try {
-    await agent.didManagerImport({
-      did: didWeb,
-      provider: 'did:web',
-      alias: `web-${normalizedOrgCode}`,
-      controllerKeyId: primaryKey.kid,
-      keys: [{
-        kid: primaryKey.kid,
-        kms: primaryKey.kms || 'local',
-        type: primaryKey.type,
-        publicKeyHex: primaryKey.publicKeyHex,
-        // Note: privateKeyHex is in the KMS, not needed here — 
-        // Veramo links via kid to the existing key in the key store
-      }],
-      services: [],
-    });
-    console.log(`[DID Manager] Imported did:web ${didWeb} → key ${primaryKey.kid}`);
-  } catch (importErr) {
-    // If import fails because DID already exists (race condition), try to get it
-    if (importErr.message && importErr.message.includes('UNIQUE constraint')) {
-      console.warn(`[DID Manager] did:web ${didWeb} already exists (concurrent import), fetching...`);
-    } else {
-      console.error(`[DID Manager] Failed to import did:web ${didWeb}:`, importErr.message);
-      // Don't throw — we can still return the did:key-based result
-      // The vc-builder.js _resolveIdentifier fallback will handle it
+  // Clean up any old did:key entries with the same alias
+  for (const id of identifiers) {
+    if (id.alias === keyAlias && id.did.startsWith('did:key:')) {
+      console.log(`[DID Manager] Cleaning up old did:key ${id.did} (alias: ${keyAlias})`);
+      try {
+        await agent.didManagerDelete({ did: id.did });
+      } catch (delErr) {
+        console.warn(`[DID Manager] Could not delete old did:key: ${delErr.message}`);
+      }
     }
   }
 
-  const didDocument = buildCanonicalDidDocument(didWeb, primaryKey);
+  // Generate Secp256k1 key pair directly
+  const { secp256k1 } = require('@noble/curves/secp256k1');
+  const privBytes = crypto.randomBytes(32);
+  const privateKeyHex = Buffer.from(privBytes).toString('hex');
+  const pubBytesCompressed = secp256k1.getPublicKey(privBytes, true);
+  const publicKeyHex = Buffer.from(pubBytesCompressed).toString('hex');
+
+  console.log(`[DID Manager] Generated Secp256k1 key pair for ${didWeb}`);
+
+  // Import did:web directly with full key material
+  const imported = await agent.didManagerImport({
+    did: didWeb,
+    provider: 'did:web',
+    alias: keyAlias,
+    keys: [{
+      kid: keyKid,
+      type: 'Secp256k1',
+      publicKeyHex,
+      privateKeyHex,
+      kms: 'local',
+    }],
+    services: [],
+  });
+
+  console.log(`[DID Manager] Imported did:web ${didWeb} with key ${keyKid}`);
+
+  // The imported identifier may have uncompressed publicKeyHex (Veramo expands it)
+  const finalKey = imported.keys && imported.keys[0];
+  const finalPublicKeyHex = finalKey ? finalKey.publicKeyHex : publicKeyHex;
+  const didDocument = buildCanonicalDidDocument(didWeb, finalPublicKeyHex);
 
   return {
     did: didWeb,
     didDocument,
     alias: alias || normalizedOrgCode,
-    controllerKeyId: keyIdentifier.controllerKeyId,
-    keys: (keyIdentifier.keys || []).map(k => ({
+    controllerKeyId: imported.controllerKeyId || keyKid,
+    keys: (imported.keys || []).map(k => ({
       kid: k.kid, type: k.type, publicKeyHex: k.publicKeyHex,
     })),
-    alreadyExisted: !!existingKey,
+    alreadyExisted: false,
   };
 }
 

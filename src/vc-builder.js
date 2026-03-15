@@ -1,9 +1,13 @@
 /**
  * VC Builder — creates and signs document lifecycle Verifiable Credentials.
  * 
- * Uses JsonWebSignature2020 with ES256K (secp256k1) — same as VeriTrust production.
+ * Uses ES256K (secp256k1) JWT signing via Veramo's keyManagerSign.
+ * This bypasses Veramo's high-level createVerifiableCredential* methods
+ * which internally resolve the issuer DID over the network — causing
+ * timeouts in Docker environments where the domain isn't reachable.
+ * 
  * Supports two signing modes:
- *   - LOCAL:    signs with the org's own Veramo-managed keys
+ *   - LOCAL:    signs with the org's own Veramo-managed keys (direct JWT)
  *   - DELEGATE: sends to Registry's Veramo agent for signing
  */
 
@@ -97,21 +101,15 @@ async function createLifecycleVC(eventType, documentDid, issuerDid, claims, stat
 /**
  * Resolve the Veramo managed identifier for an org DID.
  *
- * The SDK creates DIDs using the did:key provider (for Secp256k1 key generation)
- * but externally uses did:web identifiers. Veramo's store therefore contains
- * did:key:z... entries with alias 'orgkey-{code}', NOT did:web:... entries.
- *
- * This function bridges the gap by:
- *   1. Trying direct did:web lookup (works if DID was imported as did:web)
- *   2. Falling back to alias-based lookup using the org code from the DID
- *   3. Falling back to scanning all managed identifiers by alias pattern
+ * The SDK creates DIDs via didManagerImport with did:web provider.
+ * This function looks up the managed identifier by DID or alias.
  */
 async function _resolveIdentifier(agent, issuerDid) {
-  // 1. Try direct lookup (works if the DID was created/imported as did:web)
+  // 1. Try direct lookup by DID
   try {
     return await agent.didManagerGet({ did: issuerDid });
   } catch (_e) {
-    // Not found by did:web — expected when SDK used did:key provider
+    // Not found by DID
   }
 
   // 2. Extract org code from did:web:domain:org:{code} and try alias lookup
@@ -124,18 +122,11 @@ async function _resolveIdentifier(agent, issuerDid) {
     try {
       return await agent.didManagerGet({ alias: keyAlias });
     } catch (_e) {
-      // Not found by primary alias
-    }
-
-    // Also try just the org code as alias (older SDK versions)
-    try {
-      return await agent.didManagerGet({ alias: orgCode });
-    } catch (_e) {
-      // Not found
+      // Not found by alias
     }
   }
 
-  // 3. Scan all managed identifiers for alias match
+  // 3. Scan all managed identifiers
   const allIdentifiers = await agent.didManagerFind();
 
   if (orgCode) {
@@ -160,39 +151,86 @@ async function _resolveIdentifier(agent, issuerDid) {
   );
 }
 
+// ─── Base64url helpers ───────────────────────────────────────────────────────
+
+function base64url(buf) {
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function base64urlJSON(obj) {
+  return base64url(Buffer.from(JSON.stringify(obj), 'utf8'));
+}
+
 /**
- * Sign locally using this agent's Veramo instance.
+ * Sign locally using direct JWT construction + keyManagerSign.
+ * 
+ * This NEVER resolves DIDs over the network — it reads the key from
+ * Veramo's local store and signs the JWT directly. This avoids the
+ * Docker hairpin NAT timeout that kills createVerifiableCredential*.
  */
 async function _signLocal(credential, issuerDid) {
   const agent = await getAgent();
 
-  // Resolve the managed identifier (handles did:key ↔ did:web mismatch)
+  // Resolve the managed identifier
   const ident = await _resolveIdentifier(agent, issuerDid);
 
   const key = ident.keys && ident.keys[0];
   if (!key) throw new Error(`No signing key found for ${issuerDid} (resolved via ${ident.did})`);
 
-  const verificationMethod = key.kid;
+  // Build JWT header
+  const header = {
+    alg: 'ES256K',
+    typ: 'JWT',
+    kid: `${issuerDid}#key-1`,
+  };
 
-  // Try JSON-LD signing first (JsonWebSignature2020)
-  try {
-    const vc = await agent.createVerifiableCredentialLD({
-      credential,
-      verificationMethod,
-      keyRef: verificationMethod,
-      proofType: 'JsonWebSignature2020',
-      purpose: 'assertionMethod',
-    }, { agent });
-    return vc;
-  } catch (ldErr) {
-    // Fallback to JWT
-    console.warn('[SDK] LD signing failed, falling back to JWT:', ldErr.message);
-    const vc = await agent.createVerifiableCredential({
-      credential,
-      proofFormat: 'jwt',
-    });
-    return vc;
+  // Build JWT payload (W3C VC-JWT profile)
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expSec = credential.expirationDate
+    ? Math.floor(new Date(credential.expirationDate).getTime() / 1000)
+    : nowSec + (2 * 365 * 24 * 3600);
+
+  const payload = {
+    iss: issuerDid,
+    sub: credential.credentialSubject.id || '',
+    nbf: Math.floor(new Date(credential.issuanceDate).getTime() / 1000),
+    exp: expSec,
+    jti: credential.id || `urn:uuid:${crypto.randomUUID()}`,
+    vc: {
+      '@context': credential['@context'],
+      type: credential.type,
+      credentialSubject: credential.credentialSubject,
+    },
+  };
+
+  // Add credentialStatus if present
+  if (credential.credentialStatus) {
+    payload.vc.credentialStatus = credential.credentialStatus;
   }
+
+  // Sign: header.payload → ES256K signature via Veramo KMS
+  const signingInput = `${base64urlJSON(header)}.${base64urlJSON(payload)}`;
+
+  const signature = await agent.keyManagerSign({
+    keyRef: key.kid,
+    algorithm: 'ES256K',
+    data: signingInput,
+  });
+
+  const jwt = `${signingInput}.${signature}`;
+
+  // Return as a W3C VC with JWT proof (same shape Veramo returns)
+  return {
+    ...credential,
+    proof: {
+      type: 'JwtProof2020',
+      jwt,
+    },
+  };
 }
 
 /**
@@ -243,6 +281,17 @@ async function _signDelegated(credential) {
 async function verifyVC(credential) {
   const agent = await getAgent();
   try {
+    // For JWT VCs, verify the JWT directly
+    if (credential.proof && credential.proof.jwt) {
+      try {
+        const result = await agent.verifyCredential({
+          credential: credential.proof.jwt,
+        });
+        return { verified: result.verified !== false, error: result.error?.message || null };
+      } catch (e) {
+        return { verified: false, error: e.message };
+      }
+    }
     if (credential.proof && credential.proof.type === 'JsonWebSignature2020') {
       try {
         const result = await agent.verifyCredentialLD({ credential });

@@ -527,6 +527,18 @@ app.post('/api/documents/:did/archive', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/documents/:did/metadata', requireApiKey, async (req, res) => {
+  const documentDid = decodeURIComponent(req.params.did);
+  const { metadata, scope, metadataSha256 } = req.body || {};
+  if (!metadata) return res.status(400).json({ error: 'Required: metadata', trace_id: req.traceId });
+  try {
+    const result = await hooks.onDocumentMetadataSubmitted(documentDid, { metadata, scope, metadataSha256 }, { traceId: req.traceId });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Metadata submission failed', detail: err.message, trace_id: req.traceId });
+  }
+});
+
 app.get('/api/documents/:did/track', async (req, res) => {
   const documentDid = decodeURIComponent(req.params.did);
   try {

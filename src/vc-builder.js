@@ -12,6 +12,7 @@
  */
 
 const crypto = require('crypto');
+const { normalizeCredential } = require('did-jwt-vc');
 const { createAgentInstance } = require('../agent-setup');
 
 let agentPromise;
@@ -200,17 +201,11 @@ async function _signLocal(credential, issuerDid) {
     nbf: Math.floor(new Date(credential.issuanceDate).getTime() / 1000),
     exp: expSec,
     jti: credential.id || `urn:uuid:${crypto.randomUUID()}`,
-    vc: {
-      '@context': credential['@context'],
-      type: credential.type,
-      credentialSubject: credential.credentialSubject,
-    },
+    // Every credential field goes into the signed payload; the ones that have
+    // registered JWT claims (issuer, dates, id) travel as iss/nbf/exp/jti.
+    vc: Object.fromEntries(Object.entries(credential).filter(
+      ([k]) => !['issuer', 'issuanceDate', 'expirationDate', 'id', 'proof'].includes(k))),
   };
-
-  // Add credentialStatus if present
-  if (credential.credentialStatus) {
-    payload.vc.credentialStatus = credential.credentialStatus;
-  }
 
   // Sign: header.payload → ES256K signature via Veramo KMS
   const signingInput = `${base64urlJSON(header)}.${base64urlJSON(payload)}`;
@@ -223,14 +218,12 @@ async function _signLocal(credential, issuerDid) {
 
   const jwt = `${signingInput}.${signature}`;
 
-  // Return as a W3C VC with JWT proof (same shape Veramo returns)
-  return {
-    ...credential,
-    proof: {
-      type: 'JwtProof2020',
-      jwt,
-    },
-  };
+  // Return the credential exactly as a verifier reconstructs it from the JWT
+  // (W3C VC-JWT normalisation). Verifiers such as Veramo reject a JwtProof2020
+  // credential whose JSON differs from its JWT ("Credential JSON does not
+  // match JWT payload"): dates rounded to seconds, issuer as an object, a
+  // default expirationDate, fields that were not signed.
+  return normalizeCredential(jwt);
 }
 
 /**

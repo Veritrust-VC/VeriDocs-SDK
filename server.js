@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { createAgentInstance } = require('./agent-setup');
 const { requireApiKey } = require('./auth');
-const { createOrganizationDID, listIdentifiers } = require('./src/did-manager');
+const { createOrganizationDID, listIdentifiers, ownDomainDid, getDidDocument } = require('./src/did-manager');
 const { verifyVC } = require('./src/vc-builder');
 const hooks = require('./src/hooks/lifecycle');
 const { RegistryClient } = require('./src/registry-client');
@@ -129,7 +129,19 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get('/.well-known/did.json', (req, res) => {
+app.get('/.well-known/did.json', async (req, res) => {
+  // Organisation hosts its own DID (ORG_DID = did:web:{its host}): publish the
+  // DID document of the key kept here. Public key only.
+  const own = ownDomainDid();
+  if (own) {
+    try {
+      const doc = await getDidDocument(own);
+      if (doc) return res.type('application/did+json').send(JSON.stringify(doc));
+      return res.status(404).json({ error: `DID ${own} not created yet. POST /api/setup/org first.` });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
   const p = path.join(__dirname, '.well-known', 'did.json');
   if (fs.existsSync(p)) res.type('application/did+json').send(fs.readFileSync(p, 'utf8'));
   else res.status(404).json({ error: 'DID not initialized. POST /api/setup/org first.' });

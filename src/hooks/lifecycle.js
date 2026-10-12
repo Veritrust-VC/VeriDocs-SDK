@@ -158,6 +158,14 @@ async function onDocumentArchived(documentDid, claims, options = {}) {
   return submitLifecycleEvent('DocumentArchived', documentDid, claims || {}, options);
 }
 
+// The DMS sends the metadata projection it already filtered (no personal
+// data); the register checks again and rejects anything that slipped through.
+async function onDocumentMetadataSubmitted(documentDid, claims, options = {}) {
+  const { metadata, scope, metadataSha256 } = claims || {};
+  if (!metadata || typeof metadata !== 'object') throw new Error('metadata object is required');
+  return submitLifecycleEvent('DocumentMetadataSubmitted', documentDid, { metadata, scope, metadataSha256 }, options);
+}
+
 async function trackDocument(documentDid, options = {}) {
   const traceId = options.traceId || newTraceId();
   const orgDid = getConfiguredOrgDid();
@@ -178,5 +186,6 @@ module.exports = {
   onDocumentAssigned,
   onDocumentDecided,
   onDocumentArchived,
+  onDocumentMetadataSubmitted,
   trackDocument,
 };

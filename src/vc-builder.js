@@ -29,6 +29,8 @@ const VC_HOST_BASE = (process.env.VC_HOST_BASE || 'http://localhost:3100').repla
 const EVENT_TYPES = [
   'DocumentCreated', 'DocumentSent', 'DocumentReceived',
   'DocumentAssigned', 'DocumentDecided', 'DocumentArchived',
+  // Not a lifecycle step: the privacy-filtered metadata of the document.
+  'DocumentMetadataSubmitted',
 ];
 
 /**

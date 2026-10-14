@@ -40,7 +40,7 @@ function readStdin() {
     const signed = await signCredential(credential, issuer);
     out.push({ ref, vc: signed, issuer });
   }
-  process.stdout.write(JSON.stringify(out));
+  require('fs').writeSync(1, JSON.stringify(out));   // synchronous: exit must not cut a large result
   process.stderr.write(`re-signed ${out.length} credential(s)\n`);
   process.exit(0);
 })().catch((e) => { process.stderr.write(`ERROR ${e.message}\n`); process.exit(1); });

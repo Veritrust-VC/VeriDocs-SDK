@@ -12,6 +12,8 @@
  * one is made with the key this SDK holds for the new issuer DID. Nothing is logged
  * except a count on stderr.
  */
+// stdout carries only the JSON result: everything the SDK logs goes to stderr.
+for (const m of ['log', 'info', 'debug', 'warn']) console[m] = (...a) => process.stderr.write(a.map(String).join(' ') + '\n');
 const { signCredential } = require('../src/vc-builder');
 
 function readStdin() {

@@ -304,6 +304,7 @@ async function verifyVC(credential) {
 
 module.exports = {
   createLifecycleVC,
+  signCredential: _signLocal,
   verifyVC,
   EVENT_TYPES,
 };

@@ -364,9 +364,7 @@ async function ensureRootDid(options = {}) {
 
 async function main() {
   try {
-    console.debug('[DEBUG] Raw SECRET_KEY:', process.env.SECRET_KEY);
     const secretKey = getSecretKeyFromEnv();
-    console.debug('[DEBUG] Normalized SECRET_KEY:', secretKey);
 
     if (process.env.ROOT_DID_CEREMONY !== 'YES') {
       throw new Error('ROOT_DID_CEREMONY=YES is required to proceed with root DID creation.');

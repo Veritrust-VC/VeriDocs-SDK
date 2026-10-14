@@ -4,7 +4,6 @@ const { AbstractKeyStore } = require('@veramo/key-manager');
 class CustomPrivateKeyStore extends AbstractKeyStore {
   constructor(db, secretKey) {
     super();
-    console.debug('[DEBUG] CustomPrivateKeyStore secretKey:', secretKey);
     this.db = db;
     this.secretBox = new SecretBox(secretKey);
     this.hasMetaColumn = this.detectMetaColumn();
@@ -21,7 +20,7 @@ class CustomPrivateKeyStore extends AbstractKeyStore {
   }
 
   async importKey(args) {
-    console.debug('[DEBUG] CustomPrivateKeyStore.importKey args:', args);
+    console.debug('[DEBUG] CustomPrivateKeyStore.importKey alias:', args && args.alias);
     const { alias, type, privateKeyHex } = args;
     const encrypted = await this.secretBox.encrypt(privateKeyHex);
     if (this.hasMetaColumn) {

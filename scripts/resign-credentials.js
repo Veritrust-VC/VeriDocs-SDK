@@ -2,7 +2,7 @@
 /**
  * Re-sign existing lifecycle credentials after a DID move (e.g. a domain change).
  *
- *   node scripts/resign-credentials.js <old-domain> <new-domain> < in.json > out.json
+ *   node scripts/resign-credentials.js <old-domain> <new-domain> [out.json] < in.json   (stdout if no out.json)
  *
  * in.json:  [{ "ref": <any>, "vc": <credential as stored by the register> }, ...]
  * out.json: [{ "ref": <same>, "vc": <re-signed credential>, "issuer": <new issuer DID> }, ...]
@@ -27,7 +27,7 @@ function readStdin() {
 }
 
 (async () => {
-  const [oldDomain, newDomain] = process.argv.slice(2);
+  const [oldDomain, newDomain, outFile] = process.argv.slice(2);
   if (!oldDomain || !newDomain) throw new Error('usage: resign-credentials.js <old-domain> <new-domain>');
   const items = JSON.parse(await readStdin());
   const out = [];
@@ -40,7 +40,10 @@ function readStdin() {
     const signed = await signCredential(credential, issuer);
     out.push({ ref, vc: signed, issuer });
   }
-  require('fs').writeSync(1, JSON.stringify(out));   // synchronous: exit must not cut a large result
+  const fs = require('fs');
+  const text = JSON.stringify(out);
+  if (outFile) fs.writeFileSync(outFile, text);          // pipes through docker exec cut large output
+  else { let off = 0; const buf = Buffer.from(text); while (off < buf.length) { try { off += fs.writeSync(1, buf, off); } catch (e) { if (e.code !== 'EAGAIN') throw e; } } }
   process.stderr.write(`re-signed ${out.length} credential(s)\n`);
   process.exit(0);
 })().catch((e) => { process.stderr.write(`ERROR ${e.message}\n`); process.exit(1); });

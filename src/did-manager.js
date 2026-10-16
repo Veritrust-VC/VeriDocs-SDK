@@ -1,7 +1,9 @@
 /**
  * DID Manager — creates and manages organization and document DIDs.
  * 
- * Organization DID: did:web:{domain}:org:{code}
+ * Organization DID: did:web:{domain}:org:{code}   (hosted by the register), or
+ *                   did:web:{own-host}            (hosted by the organisation itself,
+ *                                                  when ORG_DID names such a DID)
  * Document DID:     did:web:{domain}:doc:{uuid}
  * 
  * Key design: We generate Secp256k1 key pairs ourselves using @noble/curves,
@@ -20,6 +22,24 @@ async function getAgent() {
 }
 
 const REGISTRY_DOMAIN = (process.env.REGISTRY_DOMAIN || 'localhost%3A8001');
+
+/**
+ * The organisation's own DID, when it is hosted on the organisation's own
+ * domain rather than under the register: a did:web with a host and no path,
+ * e.g. did:web:ombud.example.gov.lv. Taken from ORG_DID. Returns null when
+ * ORG_DID is empty or is a register-hosted DID (did:web:{REGISTRY_DOMAIN}:...).
+ *
+ * In this mode the key pair is still generated and kept here; the DID
+ * document is published by this SDK at /.well-known/did.json on the
+ * organisation's host, and the register binds to it after resolving it.
+ */
+const OWN_DID_RE = /^did:web:[a-z0-9.-]+(%3A[0-9]+)?$/;
+function ownDomainDid() {
+  const did = String(process.env.ORG_DID || '').trim().toLowerCase();
+  if (!did || !OWN_DID_RE.test(did)) return null;
+  if (did === `did:web:${REGISTRY_DOMAIN.toLowerCase()}`) return null;
+  return did;
+}
 
 function normalizeOrgCode(code) {
   return String(code || '')
@@ -99,7 +119,7 @@ async function createOrganizationDID(orgCode, alias) {
   const normalizedOrgCode = normalizeOrgCode(orgCode);
   if (!normalizedOrgCode) throw new Error('Invalid orgCode. Provide a non-empty slug-safe organization code.');
 
-  const didWeb = `did:web:${REGISTRY_DOMAIN}:org:${normalizedOrgCode}`;
+  const didWeb = ownDomainDid() || `did:web:${REGISTRY_DOMAIN}:org:${normalizedOrgCode}`;
   const keyAlias = `orgkey-${normalizedOrgCode}`;
   const keyKid = `${keyAlias}-key`;
 
@@ -221,7 +241,27 @@ async function getPublicKeyHex(did) {
   return key ? key.publicKeyHex : null;
 }
 
+/**
+ * DID document of a DID managed here, built from its stored public key.
+ * Returns null when this agent does not manage the DID.
+ */
+async function getDidDocument(did) {
+  const agent = await getAgent();
+  let identifier;
+  try {
+    identifier = await agent.didManagerGet({ did });
+  } catch (_e) {
+    return null;
+  }
+  const key = identifier.keys && identifier.keys[0];
+  if (!key || !key.publicKeyHex) return null;
+  return buildCanonicalDidDocument(did, key.publicKeyHex);
+}
+
 module.exports = {
+  ownDomainDid,
+  getDidDocument,
+  buildCanonicalDidDocument,
   normalizeOrgCode,
   createOrganizationDID,
   createDocumentDID,

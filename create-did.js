@@ -58,7 +58,7 @@ function getSecretKeyFromEnv() {
   const normalized = rawValue.startsWith('0x') ? rawValue : `0x${rawValue}`;
   if (!/^0x[0-9a-fA-F]{64}$/.test(normalized)) {
     throw new Error(
-      `Invalid SECRET_KEY: expected 32-byte hex (optionally prefixed with 0x). Got: ${rawValue}`
+      `Invalid SECRET_KEY: expected 32-byte hex (optionally prefixed with 0x).`
     );
   }
   return normalized.toLowerCase();
@@ -293,7 +293,6 @@ function writeDidArtifacts(keyMaterial, options = {}) {
 
 async function ensureRootKey(agent, keyMaterial) {
   const keyMeta = buildRootKeyMeta(keyMaterial);
-  console.debug('[DEBUG] Importing root key material with meta:', keyMeta);
 
   await agent.keyManagerImport({
     kid: keyMaterial.kid,
@@ -364,9 +363,7 @@ async function ensureRootDid(options = {}) {
 
 async function main() {
   try {
-    console.debug('[DEBUG] Raw SECRET_KEY:', process.env.SECRET_KEY);
     const secretKey = getSecretKeyFromEnv();
-    console.debug('[DEBUG] Normalized SECRET_KEY:', secretKey);
 
     if (process.env.ROOT_DID_CEREMONY !== 'YES') {
       throw new Error('ROOT_DID_CEREMONY=YES is required to proceed with root DID creation.');

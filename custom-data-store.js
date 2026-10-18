@@ -19,7 +19,6 @@ class CustomKeyStore extends AbstractKeyStore {
   }
 
   async importKey(args) {
-    console.debug('[DEBUG] CustomKeyStore.importKey args:', args);
     const { kid, type, publicKeyHex, meta, kms } = args;
     const identifierDid =
       args.identifierDid || (meta && meta.identifierDid) || null;
@@ -162,7 +161,6 @@ class CustomDIDStore extends AbstractDIDStore {
   }
 
   async importDID(args) {
-    console.debug('[DEBUG] CustomDIDStore.import args:', args);
     const { did, provider, alias, controllerKeyId } = args;
     this.db.prepare(`
       INSERT OR REPLACE INTO identifier (did, provider, alias, controllerKeyId, saveDate, updateDate)

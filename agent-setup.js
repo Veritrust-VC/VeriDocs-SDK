@@ -158,7 +158,6 @@ function getSecretBoxAwareKeyStore(secretKey) {
 
 async function buildAgent() {
   const normalizedSecret = normalizeSecretKey(process.env.SECRET_KEY);
-  console.debug('[DEBUG] Agent setup secretKey:', normalizedSecret);
 
   const connection = await initializeDatabase();
   const sqlite = getSqliteDb();

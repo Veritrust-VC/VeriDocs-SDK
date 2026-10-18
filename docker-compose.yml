@@ -11,7 +11,7 @@ services:
       - "${SDK_PORT:-3100}:3100"
     environment:
       PORT: "3100"
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set (generate with: openssl rand -hex 32)}
+      SECRET_KEY: "${SECRET_KEY:?SECRET_KEY must be set - generate one with openssl rand -hex 32}"
       ORG_DID: ${ORG_DID:-}
       REGISTRY_URL: ${REGISTRY_URL:-http://host.docker.internal:8001}
       REGISTRY_EMAIL: ${REGISTRY_EMAIL:-}
